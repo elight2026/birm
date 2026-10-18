@@ -1,4 +1,5 @@
-import express, { Request, Response } from 'express';
+import express from 'express';
+import type { Request, Response } from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
@@ -1488,17 +1489,41 @@ console.log('[+] Done! Results written to birs_bot_results.xlsx');
 
 // Vite Integration
 async function startServer() {
-  if (process.env.NODE_ENV !== 'production') {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: 'spa',
-    });
-    app.use(vite.middlewares);
-  } else {
-    const distPath = path.join(__dirname, 'dist');
+  const isProd = process.env.NODE_ENV === 'production';
+  const distPath = path.join(__dirname, 'dist');
+  const hasDist = fs.existsSync(distPath) && fs.existsSync(path.join(distPath, 'index.html'));
+
+  if (isProd && hasDist) {
     app.use(express.static(distPath));
     app.get('*', (_req: Request, res: Response) => {
       res.sendFile(path.join(distPath, 'index.html'));
+    });
+  } else {
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: 'custom',
+    });
+    app.use(vite.middlewares);
+    app.get('*', async (req: Request, res: Response, next) => {
+      const url = req.originalUrl;
+      try {
+        let template = fs.readFileSync(path.resolve(__dirname, 'index.html'), 'utf-8');
+        template = await vite.transformIndexHtml(url, template);
+        const reactRefreshPreamble = `
+    <script type="module">
+      import RefreshRuntime from "/@react-refresh";
+      RefreshRuntime.injectIntoGlobalHook(window);
+      window.$RefreshReg$ = () => {};
+      window.$RefreshSig$ = () => (type) => type;
+      window.__vite_plugin_react_preamble_installed__ = true;
+    </script>`;
+        if (!template.includes('__vite_plugin_react_preamble_installed__')) {
+          template = template.replace('<head>', `<head>${reactRefreshPreamble}`);
+        }
+        res.status(200).set({ 'Content-Type': 'text/html' }).end(template);
+      } catch (e: any) {
+        next(e);
+      }
     });
   }
 

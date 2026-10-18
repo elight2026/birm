@@ -152,43 +152,62 @@ export default function App() {
       eventSource = new EventSource(`/api/bot/jobs/${currentJob.id}/stream`);
 
       eventSource.addEventListener('log', (e) => {
-        const log: BotLog = JSON.parse(e.data);
-        setCurrentJob((prev) => {
-          if (!prev || prev.id !== currentJob.id) return prev;
-          const exists = prev.logs.some((l) => l.id === log.id);
-          if (exists) return prev;
-          return { ...prev, logs: [...prev.logs, log] };
-        });
+        try {
+          const log: BotLog = JSON.parse(e.data);
+          setCurrentJob((prev) => {
+            if (!prev || prev.id !== currentJob.id) return prev;
+            const logs = prev.logs || [];
+            const exists = logs.some((l) => l.id === log.id);
+            if (exists) return prev;
+            return { ...prev, logs: [...logs, log] };
+          });
+        } catch {
+          // ignore malformed SSE log
+        }
       });
 
       eventSource.addEventListener('result', (e) => {
-        const data = JSON.parse(e.data);
-        setCurrentJob((prev) => {
-          if (!prev || prev.id !== currentJob.id) return prev;
-          const existingIdx = prev.results.findIndex((r) => r.nin === data.result.nin);
-          const newResults = existingIdx >= 0
-            ? prev.results.map((r, i) => (i === existingIdx ? data.result : r))
-            : [...prev.results, data.result];
-          return {
-            ...prev,
-            results: newResults,
-            stats: data.stats,
-            inFlight: [],
-          };
-        });
+        try {
+          const data = JSON.parse(e.data);
+          if (!data?.result) return;
+          setCurrentJob((prev) => {
+            if (!prev || prev.id !== currentJob.id) return prev;
+            const results = prev.results || [];
+            const existingIdx = results.findIndex((r) => r && r.nin === data.result.nin);
+            const newResults = existingIdx >= 0
+              ? results.map((r, i) => (i === existingIdx ? data.result : r))
+              : [...results, data.result];
+            return {
+              ...prev,
+              results: newResults,
+              stats: data.stats || prev.stats,
+              inFlight: [],
+            };
+          });
+        } catch {
+          // ignore malformed SSE result
+        }
       });
 
       eventSource.addEventListener('status', (e) => {
-        const data = JSON.parse(e.data);
-        setCurrentJob((prev) => {
-          if (!prev || prev.id !== currentJob.id) return prev;
-          return { ...prev, status: data.status, stats: data.stats || prev.stats };
-        });
+        try {
+          const data = JSON.parse(e.data);
+          setCurrentJob((prev) => {
+            if (!prev || prev.id !== currentJob.id) return prev;
+            return { ...prev, status: data.status, stats: data.stats || prev.stats };
+          });
+        } catch {
+          // ignore malformed SSE status
+        }
       });
 
       eventSource.addEventListener('inFlight', (e) => {
-        const data = JSON.parse(e.data);
-        setCurrentJob((prev) => (prev ? { ...prev, inFlight: data.inFlight } : prev));
+        try {
+          const data = JSON.parse(e.data);
+          setCurrentJob((prev) => (prev ? { ...prev, inFlight: data.inFlight || [] } : prev));
+        } catch {
+          // ignore malformed SSE inFlight
+        }
       });
     } catch {
       // SSE not available, relies on polling below
@@ -1100,15 +1119,16 @@ export default function App() {
                       </tr>
                     ) : (
                       filteredResults.map((r) => {
+                        const d = (r && r.details && typeof r.details === 'object') ? r.details : {};
                         const fullName = [
-                          r.details['First Name'] || r.details.firstName,
-                          r.details['Middle Name'] || r.details.middleName,
-                          r.details['Surname'] || r.details.surname
+                          d['First Name'] || d.firstName,
+                          d['Middle Name'] || d.middleName,
+                          d['Surname'] || d.surname
                         ].filter(Boolean).join(' ') || (r.status === 'success' ? 'Verified' : '—');
 
-                        const phone = r.details['Mobile'] || r.details.mobile || r.details.telephoneno || '—';
-                        const dob = r.details['Date of Birth'] || r.details.birthdate || r.details.dateOfBirth || '';
-                        const gender = r.details['Gender'] || r.details.gender || '';
+                        const phone = d['Mobile'] || d.mobile || d.telephoneno || '—';
+                        const dob = d['Date of Birth'] || d.birthdate || d.dateOfBirth || '';
+                        const gender = d['Gender'] || d.gender || '';
 
                         return (
                           <tr key={r.nin} className="hover:bg-slate-800/30 transition-colors">
@@ -1540,12 +1560,12 @@ export default function App() {
                 <span className="text-slate-400 font-medium block border-b border-slate-800 pb-1">
                   Extracted Identity Credentials:
                 </span>
-                {selectedResult.details && Object.keys(selectedResult.details).length > 0 ? (
+                {selectedResult.details && typeof selectedResult.details === 'object' && Object.keys(selectedResult.details).length > 0 ? (
                   Object.entries(selectedResult.details).map(([k, v]) => (
                     <div key={k} className="flex justify-between py-1 border-b border-slate-800/40 last:border-0">
                       <span className="text-slate-400">{k}:</span>
                       <span className="text-slate-200 font-medium text-right max-w-xs break-words">
-                        {String(v)}
+                        {typeof v === 'object' ? JSON.stringify(v) : String(v)}
                       </span>
                     </div>
                   ))
