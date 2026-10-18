@@ -1,6 +1,0 @@
-{
-  "name": "BIRS NIN Autonomous Verifier & Bot",
-  "description": "Autonomous bulk National Identification Number (NIN) verification bot with background processing, Excel import/export, rate limiting, and automated retry system.",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
-}
