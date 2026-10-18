@@ -18,6 +18,54 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 const DEFAULT_GATEWAY_URL = 'https://service-gateway.bsg.com.ng/api/user-module/api/nin/validate';
 const DEFAULT_MERCHANT_KEY = 'e6385c73adba4eb6807c0ec858fd8f5c';
 
+// CORS & iFrame Friendly Headers
+app.use((_req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-MERCHANT-KEY');
+  next();
+});
+
+// Deterministic realistic Nigerian taxpayer generator for sandbox/testing
+export function generateMockTaxpayer(nin: string): Record<string, any> {
+  const firstNames = ['Adebayo', 'Chioma', 'Musa', 'Amina', 'Chukwuemeka', 'Fatima', 'Babatunde', 'Ngozi', 'Ibrahim', 'Zainab', 'Oche', 'Dooshima'];
+  const surnames = ['Okon', 'Danladi', 'Bello', 'Alabi', 'Eze', 'Abubakar', 'Audu', 'Agbo', 'Terkura', 'Orngu', 'Umar', 'Gbande'];
+  const middleNames = ['James', 'Grace', 'David', 'Blessing', 'Seun', 'Hassan', 'Emmanuel', 'Kemi', 'Ochoche', 'Saheed', 'Kator', 'Aondo'];
+  const lgas = ['Makurdi', 'Gboko', 'Otukpo', 'Gwer East', 'Vandeikya', 'Katsina-Ala', 'Oju', 'Konshisha', 'Ushongo', 'Guma'];
+
+  let hash = 0;
+  for (let i = 0; i < nin.length; i++) {
+    hash = Math.imul(hash, 31) + nin.charCodeAt(i);
+  }
+  const posHash = Math.abs(hash);
+
+  const fn = firstNames[posHash % firstNames.length];
+  const sn = surnames[Math.floor(posHash / 7) % surnames.length];
+  const mn = middleNames[Math.floor(posHash / 13) % middleNames.length];
+  const lga = lgas[Math.floor(posHash / 19) % lgas.length];
+  const year = 1972 + (posHash % 33);
+  const month = String(1 + (posHash % 12)).padStart(2, '0');
+  const day = String(1 + (posHash % 28)).padStart(2, '0');
+  const gender = posHash % 2 === 0 ? 'Male' : 'Female';
+  const phone = '080' + String(10000000 + (posHash % 89999999)).slice(0, 8);
+
+  return {
+    'NIN': nin,
+    'First Name': fn,
+    'Surname': sn,
+    'Middle Name': mn,
+    'Date of Birth': `${day}/${month}/${year}`,
+    'Gender': gender,
+    'Mobile': phone,
+    'State of Origin': 'Benue State',
+    'LGA of Origin': lga,
+    'Taxpayer ID (TIN)': `BIRS-TIN-${year}-${nin.slice(-4)}`,
+    'Tracking ID': `TRK-${posHash.toString(36).toUpperCase()}`,
+    'Residential Address': `No. ${(posHash % 120) + 1} High Level Road, ${lga}, Benue State`,
+    'Verification Source': 'BIRS Identity Gateway (Validated)',
+  };
+}
+
 // Data types
 export interface VerificationResult {
   nin: string;
@@ -58,6 +106,7 @@ export interface BotJob {
     merchantKey: string;
     gatewayUrl: string;
     autoRetry: boolean;
+    isDemo: boolean;
   };
   stats: {
     total: number;
@@ -176,6 +225,7 @@ export async function verifySingleNin(
     gatewayUrl?: string;
     timeoutMs?: number;
     abortSignal?: AbortSignal;
+    isDemo?: boolean;
   } = {}
 ): Promise<{ status: 'success' | 'failed'; message: string; details: Record<string, any>; httpStatus?: number }> {
   const cleanedNin = String(nin).replace(/\D/g, '');
@@ -184,6 +234,18 @@ export async function verifySingleNin(
       status: 'failed',
       message: 'Invalid NIN format (must be exactly 11 digits)',
       details: {},
+    };
+  }
+
+  // Support Sandbox / Simulation Mode for testing & demonstrations
+  if (options.isDemo) {
+    // Realistic micro-delay (150ms-350ms)
+    await new Promise((r) => setTimeout(r, 150 + Math.floor(Math.random() * 200)));
+    return {
+      status: 'success',
+      message: 'Verified successfully (Sandbox / Demo Mode)',
+      details: generateMockTaxpayer(cleanedNin),
+      httpStatus: 200,
     };
   }
 
@@ -317,6 +379,7 @@ async function runBotJobWorker(job: BotJob) {
           gatewayUrl: job.settings.gatewayUrl,
           timeoutMs: job.settings.timeoutMs,
           abortSignal: abortController.signal,
+          isDemo: job.settings.isDemo,
         });
 
         lastResult = res;
@@ -402,12 +465,17 @@ async function runBotJobWorker(job: BotJob) {
 
 // 1. Instant Single NIN Verification
 app.post('/api/verify', async (req: Request, res: Response) => {
-  const { nin, merchantKey, gatewayUrl, timeoutMs } = req.body;
+  const { nin, merchantKey, gatewayUrl, timeoutMs, isDemo } = req.body;
   if (!nin) {
     res.status(400).json({ error: 'NIN is required' });
     return;
   }
-  const result = await verifySingleNin(String(nin), { merchantKey, gatewayUrl, timeoutMs });
+  const result = await verifySingleNin(String(nin), {
+    merchantKey,
+    gatewayUrl,
+    timeoutMs,
+    isDemo: Boolean(isDemo),
+  });
   res.json(result);
 });
 
@@ -423,6 +491,7 @@ app.post('/api/bot/jobs', (req: Request, res: Response) => {
     merchantKey = DEFAULT_MERCHANT_KEY,
     gatewayUrl = DEFAULT_GATEWAY_URL,
     autoRetry = true,
+    isDemo = false,
   } = req.body;
 
   if (!Array.isArray(nins) || nins.length === 0) {
@@ -466,6 +535,7 @@ app.post('/api/bot/jobs', (req: Request, res: Response) => {
       merchantKey: String(merchantKey || DEFAULT_MERCHANT_KEY).trim(),
       gatewayUrl: String(gatewayUrl || DEFAULT_GATEWAY_URL).trim(),
       autoRetry: autoRetry !== false,
+      isDemo: Boolean(isDemo),
     },
     stats: {
       total: cleaned.length,
@@ -611,8 +681,9 @@ app.get('/api/bot/jobs/:id/stream', (req: Request, res: Response) => {
   }
 
   res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
   res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
   res.flushHeaders?.();
 
   if (!sseClients.has(job.id)) {
@@ -629,7 +700,16 @@ app.get('/api/bot/jobs/:id/stream', (req: Request, res: Response) => {
     resultsCount: job.results.length,
   })}\n\n`);
 
+  const keepAliveTimer = setInterval(() => {
+    try {
+      res.write(': ping\n\n');
+    } catch {
+      clearInterval(keepAliveTimer);
+    }
+  }, 10000);
+
   req.on('close', () => {
+    clearInterval(keepAliveTimer);
     const clients = sseClients.get(job.id);
     if (clients) {
       clients.delete(res);

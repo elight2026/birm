@@ -88,17 +88,32 @@ const DEFAULT_MERCHANT_KEY = 'e6385c73adba4eb6807c0ec858fd8f5c';
 export default function App() {
   const [activeTab, setActiveTab] = useState<'bot' | 'single' | 'standalone' | 'settings'>('bot');
   
+  // Toast Notification State
+  const [toast, setToast] = useState<{ message: string; type: 'info' | 'success' | 'error' } | null>(null);
+  const showToast = (message: string, type: 'info' | 'success' | 'error' = 'info') => {
+    setToast({ message, type });
+    setTimeout(() => {
+      setToast((curr) => (curr?.message === message ? null : curr));
+    }, 4500);
+  };
+
   // Bot Batch State
   const [currentJob, setCurrentJob] = useState<BotJob | null>(null);
+  const currentJobRef = useRef<BotJob | null>(null);
+  currentJobRef.current = currentJob;
+
   const [jobList, setJobList] = useState<any[]>([]);
   const [inputNinsText, setInputNinsText] = useState('');
   const [parsedNins, setParsedNins] = useState<string[]>([]);
   const [fileName, setFileName] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
 
+  // Engine Mode: Demo/Sandbox (Instant realistic simulation) vs Live Gateway
+  const [isDemoMode, setIsDemoMode] = useState(true);
+
   // Bot Settings Controls
-  const [delayMs, setDelayMs] = useState(2500);
-  const [jitterMs, setJitterMs] = useState(500);
+  const [delayMs, setDelayMs] = useState(2000);
+  const [jitterMs, setJitterMs] = useState(300);
   const [concurrency, setConcurrency] = useState(1);
   const [autoRetry, setAutoRetry] = useState(true);
   const [maxRetries, setMaxRetries] = useState(2);
@@ -119,22 +134,23 @@ export default function App() {
   // Terminal scroll ref
   const terminalEndRef = useRef<HTMLDivElement>(null);
 
-  // Poll or SSE connection to current job
+  // Initial and periodic fetch of jobs
   useEffect(() => {
     fetchJobs();
     const interval = setInterval(() => {
       fetchJobs();
-    }, 4000);
+    }, 3500);
     return () => clearInterval(interval);
   }, []);
 
+  // Real-time SSE connection with polling fallback
   useEffect(() => {
     if (!currentJob?.id) return;
 
     let eventSource: EventSource | null = null;
     try {
       eventSource = new EventSource(`/api/bot/jobs/${currentJob.id}/stream`);
-      
+
       eventSource.addEventListener('log', (e) => {
         const log: BotLog = JSON.parse(e.data);
         setCurrentJob((prev) => {
@@ -175,22 +191,24 @@ export default function App() {
         setCurrentJob((prev) => (prev ? { ...prev, inFlight: data.inFlight } : prev));
       });
     } catch {
-      // Fallback to polling
+      // SSE not available, relies on polling below
     }
 
+    // High frequency poll while active using currentJobRef to prevent stale closures
     const pollJob = setInterval(async () => {
-      if (currentJob.status === 'running' || currentJob.status === 'paused') {
+      const active = currentJobRef.current;
+      if (active && (active.status === 'running' || active.status === 'paused')) {
         try {
-          const res = await fetch(`/api/bot/jobs/${currentJob.id}`);
+          const res = await fetch(`/api/bot/jobs/${active.id}`);
           if (res.ok) {
             const data = await res.json();
             setCurrentJob(data.job);
           }
         } catch {
-          // ignore
+          // ignore transient poll failure
         }
       }
-    }, 2000);
+    }, 1500);
 
     return () => {
       if (eventSource) eventSource.close();
@@ -210,13 +228,20 @@ export default function App() {
       const res = await fetch('/api/bot/jobs');
       if (res.ok) {
         const data = await res.json();
-        setJobList(data.jobs || []);
-        // If current job is not selected or finished, keep updated
-        if (currentJob) {
-          const updated = data.jobs.find((j: any) => j.id === currentJob.id);
-          if (updated && updated.status !== currentJob.status) {
-            // refresh job details
-            const detailRes = await fetch(`/api/bot/jobs/${currentJob.id}`);
+        const jobs = data.jobs || [];
+        setJobList(jobs);
+
+        // Auto-select latest job if none currently active
+        if (!currentJobRef.current && jobs.length > 0) {
+          const detailRes = await fetch(`/api/bot/jobs/${jobs[0].id}`);
+          if (detailRes.ok) {
+            const d = await detailRes.json();
+            setCurrentJob(d.job);
+          }
+        } else if (currentJobRef.current) {
+          const updated = jobs.find((j: any) => j.id === currentJobRef.current?.id);
+          if (updated && updated.status !== currentJobRef.current.status) {
+            const detailRes = await fetch(`/api/bot/jobs/${currentJobRef.current.id}`);
             if (detailRes.ok) {
               const d = await detailRes.json();
               setCurrentJob(d.job);
@@ -262,8 +287,13 @@ export default function App() {
 
         const found = handleExtractNins(extractedText);
         setInputNinsText(found.join('\n'));
+        if (found.length > 0) {
+          showToast(`Extracted ${found.length} valid 11-digit NINs from ${file.name}`, 'success');
+        } else {
+          showToast('No valid 11-digit numbers found in uploaded file.', 'error');
+        }
       } catch (err: any) {
-        alert('Could not read spreadsheet file: ' + err.message);
+        showToast('Could not read spreadsheet file: ' + err.message, 'error');
       } finally {
         setIsUploading(false);
       }
@@ -286,14 +316,16 @@ export default function App() {
     ];
     setInputNinsText(sample.join('\n'));
     handleExtractNins(sample.join(' '));
-    setFileName('sample_nin_batch.xlsx');
+    setFileName('sample_taxpayer_batch.xlsx');
+    setIsDemoMode(true);
+    showToast('Loaded 10 demo NINs in Sandbox Mode. Click Launch to run!', 'success');
   };
 
   // Bot Controls
   const handleStartBot = async () => {
     const nins = parsedNins.length > 0 ? parsedNins : handleExtractNins(inputNinsText);
     if (nins.length === 0) {
-      alert('Please provide at least one valid 11-digit NIN');
+      showToast('Please provide at least one valid 11-digit NIN', 'error');
       return;
     }
 
@@ -310,25 +342,26 @@ export default function App() {
           maxRetries,
           autoRetry,
           merchantKey,
+          isDemo: isDemoMode,
         }),
       });
 
       if (!res.ok) {
         const err = await res.json();
-        alert('Failed to start bot: ' + (err.error || 'Unknown error'));
+        showToast('Failed to start bot: ' + (err.error || 'Unknown error'), 'error');
         return;
       }
 
       const data = await res.json();
-      // Fetch full newly created job
       const jobRes = await fetch(`/api/bot/jobs/${data.jobId}`);
       if (jobRes.ok) {
         const jobData = await jobRes.json();
         setCurrentJob(jobData.job);
+        showToast(`Bot started for ${nins.length} NINs (${isDemoMode ? 'Sandbox Mode' : 'Live Gateway'})`, 'success');
       }
       fetchJobs();
     } catch (err: any) {
-      alert('Failed to trigger bot worker: ' + err.message);
+      showToast('Failed to trigger bot worker: ' + err.message, 'error');
     }
   };
 
@@ -336,19 +369,21 @@ export default function App() {
     if (!currentJob) return;
     await fetch(`/api/bot/jobs/${currentJob.id}/pause`, { method: 'POST' });
     setCurrentJob((prev) => (prev ? { ...prev, status: 'paused' } : prev));
+    showToast('Autonomous bot paused.', 'info');
   };
 
   const handleResumeBot = async () => {
     if (!currentJob) return;
     await fetch(`/api/bot/jobs/${currentJob.id}/resume`, { method: 'POST' });
     setCurrentJob((prev) => (prev ? { ...prev, status: 'running' } : prev));
+    showToast('Autonomous bot resumed.', 'info');
   };
 
   const handleStopBot = async () => {
     if (!currentJob) return;
-    if (!confirm('Are you sure you want to stop the autonomous bot worker?')) return;
     await fetch(`/api/bot/jobs/${currentJob.id}/stop`, { method: 'POST' });
     setCurrentJob((prev) => (prev ? { ...prev, status: 'stopped' } : prev));
+    showToast('Autonomous bot execution stopped.', 'info');
   };
 
   const handleRetryFailed = async () => {
@@ -357,6 +392,7 @@ export default function App() {
     if (res.ok) {
       const d = await fetch(`/api/bot/jobs/${currentJob.id}`).then((r) => r.json());
       setCurrentJob(d.job);
+      showToast('Re-enqueued failed NINs for retry.', 'success');
     }
   };
 
@@ -373,7 +409,7 @@ export default function App() {
     e.preventDefault();
     const clean = singleNin.replace(/\D/g, '');
     if (clean.length !== 11) {
-      alert('Please enter a valid 11-digit NIN');
+      showToast('Please enter a valid 11-digit NIN', 'error');
       return;
     }
     setSingleLoading(true);
@@ -382,18 +418,49 @@ export default function App() {
       const res = await fetch('/api/verify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ nin: clean, merchantKey }),
+        body: JSON.stringify({ nin: clean, merchantKey, isDemo: isDemoMode }),
       });
       const data = await res.json();
       setSingleResult(data);
+      if (data.status === 'success') {
+        showToast('Taxpayer NIN verified successfully!', 'success');
+      } else {
+        showToast('Verification failed: ' + data.message, 'error');
+      }
     } catch (err: any) {
       setSingleResult({
         status: 'failed',
         message: 'Network error or portal unreachable: ' + err.message,
         details: {},
       });
+      showToast('Network error contacting verification service', 'error');
     } finally {
       setSingleLoading(false);
+    }
+  };
+
+  // Safe client-side file exporter
+  const handleDownloadExport = async (format: 'xlsx' | 'csv', filter: 'all' | 'success') => {
+    if (!currentJob || currentJob.results.length === 0) {
+      showToast('No verification results to export yet. Run a verification job first.', 'error');
+      return;
+    }
+    try {
+      const url = `/api/bot/jobs/${currentJob.id}/export?format=${format}&filter=${filter}`;
+      const res = await fetch(url);
+      if (!res.ok) throw new Error('Download failed');
+      const blob = await res.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = `BIRS_NIN_${currentJob.id}_${filter}.${format}`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(blobUrl);
+      showToast(`Exported ${format.toUpperCase()} (${filter}) successfully!`, 'success');
+    } catch (err: any) {
+      showToast('Failed to download report: ' + err.message, 'error');
     }
   };
 
@@ -439,9 +506,13 @@ export default function App() {
                 <h1 className="text-base lg:text-lg font-bold tracking-tight text-white">
                   BIRS NIN Autonomous Bot
                 </h1>
-                <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 font-medium flex items-center gap-1">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-                  Active Worker v2.1
+                <span className={`text-xs px-2 py-0.5 rounded-full border font-medium flex items-center gap-1.5 ${
+                  isDemoMode
+                    ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30'
+                    : 'bg-amber-500/10 text-amber-300 border-amber-500/30'
+                }`}>
+                  <span className={`w-1.5 h-1.5 rounded-full ${isDemoMode ? 'bg-emerald-400' : 'bg-amber-400'} animate-pulse`}></span>
+                  {isDemoMode ? 'Sandbox Active' : 'Live Gateway Active'}
                 </span>
               </div>
               <p className="text-xs text-slate-400">
@@ -450,58 +521,116 @@ export default function App() {
             </div>
           </div>
 
-          {/* Navigation Tabs */}
-          <nav className="flex items-center gap-1 bg-slate-800/80 p-1 rounded-xl border border-slate-700/60 text-xs font-medium">
-            <button
-              onClick={() => setActiveTab('bot')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all ${
-                activeTab === 'bot'
-                  ? 'bg-emerald-600 text-white shadow'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'
-              }`}
-            >
-              <Bot className="w-4 h-4" />
-              <span>Autonomous Bot</span>
-              {currentJob && currentJob.status === 'running' && (
-                <span className="w-2 h-2 rounded-full bg-emerald-300 animate-ping ml-0.5" />
-              )}
-            </button>
-            <button
-              onClick={() => setActiveTab('single')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all ${
-                activeTab === 'single'
-                  ? 'bg-emerald-600 text-white shadow'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'
-              }`}
-            >
-              <Search className="w-4 h-4" />
-              <span>Instant Lookup</span>
-            </button>
-            <button
-              onClick={() => setActiveTab('standalone')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all ${
-                activeTab === 'standalone'
-                  ? 'bg-emerald-600 text-white shadow'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'
-              }`}
-            >
-              <Code2 className="w-4 h-4" />
-              <span>Headless &amp; Extension</span>
-            </button>
-            <button
-              onClick={() => setActiveTab('settings')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all ${
-                activeTab === 'settings'
-                  ? 'bg-emerald-600 text-white shadow'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'
-              }`}
-            >
-              <Settings className="w-4 h-4" />
-              <span>Settings</span>
-            </button>
-          </nav>
+          {/* Mode Selector and Navigation Tabs */}
+          <div className="flex items-center gap-2.5 flex-wrap">
+            <div className="flex items-center bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs font-medium">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsDemoMode(true);
+                  showToast('Sandbox / Demo Mode enabled (instant realistic taxpayer records)', 'info');
+                }}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all ${
+                  isDemoMode
+                    ? 'bg-emerald-600 text-white shadow font-semibold'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>Sandbox Demo</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsDemoMode(false);
+                  showToast('Live BIRS Portal Mode enabled (queries service-gateway.bsg.com.ng)', 'info');
+                }}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all ${
+                  !isDemoMode
+                    ? 'bg-amber-600 text-white shadow font-semibold'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <Zap className="w-3.5 h-3.5" />
+                <span>Live Portal</span>
+              </button>
+            </div>
+
+            <nav className="flex items-center gap-1 bg-slate-800/80 p-1 rounded-xl border border-slate-700/60 text-xs font-medium">
+              <button
+                onClick={() => setActiveTab('bot')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all ${
+                  activeTab === 'bot'
+                    ? 'bg-emerald-600 text-white shadow'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'
+                }`}
+              >
+                <Bot className="w-4 h-4" />
+                <span>Autonomous Bot</span>
+                {currentJob && currentJob.status === 'running' && (
+                  <span className="w-2 h-2 rounded-full bg-emerald-300 animate-ping ml-0.5" />
+                )}
+              </button>
+              <button
+                onClick={() => setActiveTab('single')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all ${
+                  activeTab === 'single'
+                    ? 'bg-emerald-600 text-white shadow'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'
+                }`}
+              >
+                <Search className="w-4 h-4" />
+                <span>Instant Lookup</span>
+              </button>
+              <button
+                onClick={() => setActiveTab('standalone')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all ${
+                  activeTab === 'standalone'
+                    ? 'bg-emerald-600 text-white shadow'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'
+                }`}
+              >
+                <Code2 className="w-4 h-4" />
+                <span>Headless &amp; Extension</span>
+              </button>
+              <button
+                onClick={() => setActiveTab('settings')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all ${
+                  activeTab === 'settings'
+                    ? 'bg-emerald-600 text-white shadow'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'
+                }`}
+              >
+                <Settings className="w-4 h-4" />
+                <span>Settings</span>
+              </button>
+            </nav>
+          </div>
         </div>
       </header>
+
+      {/* Floating In-App Toast */}
+      {toast && (
+        <div className={`fixed top-4 right-4 z-50 flex items-center gap-3 px-4 py-3 rounded-2xl shadow-2xl text-xs font-semibold border backdrop-blur-md transition-all ${
+          toast.type === 'success'
+            ? 'bg-emerald-950/95 text-emerald-200 border-emerald-500/50 shadow-emerald-950/50'
+            : toast.type === 'error'
+            ? 'bg-red-950/95 text-red-200 border-red-500/50 shadow-red-950/50'
+            : 'bg-slate-900/95 text-slate-200 border-slate-700 shadow-slate-950/50'
+        }`}>
+          {toast.type === 'success' && <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />}
+          {toast.type === 'error' && <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />}
+          {toast.type === 'info' && <Zap className="w-4 h-4 text-amber-400 shrink-0" />}
+          <span>{toast.message}</span>
+          <button
+            onClick={() => setToast(null)}
+            className="ml-2 text-slate-400 hover:text-white text-sm leading-none"
+            title="Dismiss"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       {/* Main Content Area */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-4 lg:p-8 space-y-6">
@@ -678,14 +807,27 @@ export default function App() {
                     </label>
                   </div>
 
+                  {/* Mode Indicator & Launch Button */}
+                  <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800 text-xs flex items-center justify-between">
+                    <span className="text-slate-400">Target Environment:</span>
+                    <span className={`font-semibold flex items-center gap-1.5 ${isDemoMode ? 'text-emerald-400' : 'text-amber-400'}`}>
+                      {isDemoMode ? <Sparkles className="w-3.5 h-3.5" /> : <Zap className="w-3.5 h-3.5" />}
+                      {isDemoMode ? 'Sandbox Mode' : 'Live Gateway'}
+                    </span>
+                  </div>
+
                   {/* Primary Trigger Button */}
                   <button
                     onClick={handleStartBot}
                     disabled={parsedNins.length === 0 || !!(currentJob && currentJob.status === 'running')}
-                    className="w-full py-3 px-4 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-semibold rounded-xl flex items-center justify-center gap-2 text-sm shadow-lg shadow-emerald-900/30 transition-all cursor-pointer disabled:cursor-not-allowed"
+                    className={`w-full py-3 px-4 ${
+                      isDemoMode
+                        ? 'bg-emerald-600 hover:bg-emerald-500 shadow-emerald-900/30'
+                        : 'bg-amber-600 hover:bg-amber-500 shadow-amber-900/30'
+                    } disabled:opacity-50 text-white font-semibold rounded-xl flex items-center justify-center gap-2 text-sm shadow-lg transition-all cursor-pointer disabled:cursor-not-allowed`}
                   >
                     <Play className="w-4 h-4 fill-current" />
-                    <span>Launch Autonomous Verification Bot</span>
+                    <span>Launch Autonomous Bot ({isDemoMode ? 'Sandbox' : 'Live'})</span>
                   </button>
                 </div>
               </div>
@@ -856,33 +998,21 @@ export default function App() {
                   </div>
 
                   <div className="flex items-center gap-2">
-                    <a
-                      href={currentJob ? `/api/bot/jobs/${currentJob.id}/export?format=xlsx&filter=all` : '#'}
-                      download
-                      onClick={(e) => {
-                        if (!currentJob || currentJob.results.length === 0) {
-                          e.preventDefault();
-                          alert('No verified results to export yet.');
-                        }
-                      }}
+                    <button
+                      type="button"
+                      onClick={() => handleDownloadExport('xlsx', 'all')}
                       className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 shadow transition-all cursor-pointer"
                     >
                       <Download className="w-3.5 h-3.5" />
                       <span>Export Excel (.xlsx)</span>
-                    </a>
-                    <a
-                      href={currentJob ? `/api/bot/jobs/${currentJob.id}/export?format=csv&filter=success` : '#'}
-                      download
-                      onClick={(e) => {
-                        if (!currentJob || currentJob.results.length === 0) {
-                          e.preventDefault();
-                          alert('No verified results to export yet.');
-                        }
-                      }}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDownloadExport('csv', 'success')}
                       className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-medium flex items-center gap-1.5 transition-all cursor-pointer"
                     >
                       <span>CSV (Success)</span>
-                    </a>
+                    </button>
                   </div>
                 </div>
               </div>
@@ -1036,6 +1166,42 @@ export default function App() {
                 Query the live BIRS identity validation portal directly for individual taxpayer lookup and verification.
               </p>
 
+              {/* Mode status & Quick Demo Buttons */}
+              <div className="flex items-center justify-between flex-wrap gap-2 mb-4 p-3 bg-slate-950 rounded-xl border border-slate-800 text-xs">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-slate-400">Environment:</span>
+                  <span className={`font-semibold flex items-center gap-1 ${isDemoMode ? 'text-emerald-400' : 'text-amber-400'}`}>
+                    {isDemoMode ? <Sparkles className="w-3.5 h-3.5" /> : <Zap className="w-3.5 h-3.5" />}
+                    {isDemoMode ? 'Sandbox Mode' : 'Live Gateway'}
+                  </span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-slate-500 text-[11px]">Quick Samples:</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSingleNin('10293847561');
+                      setIsDemoMode(true);
+                      showToast('Filled sample NIN 10293847561 in Sandbox Mode', 'info');
+                    }}
+                    className="px-2 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-[11px] font-mono"
+                  >
+                    10293847561
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSingleNin('29384756102');
+                      setIsDemoMode(true);
+                      showToast('Filled sample NIN 29384756102 in Sandbox Mode', 'info');
+                    }}
+                    className="px-2 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-[11px] font-mono"
+                  >
+                    29384756102
+                  </button>
+                </div>
+              </div>
+
               <form onSubmit={handleVerifySingle} className="space-y-4">
                 <div>
                   <label className="block text-xs font-medium text-slate-300 mb-1.5">
@@ -1054,17 +1220,21 @@ export default function App() {
                 <button
                   type="submit"
                   disabled={singleLoading || singleNin.length !== 11}
-                  className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-semibold rounded-xl text-sm flex items-center justify-center gap-2 shadow-lg shadow-emerald-900/30 transition-all cursor-pointer disabled:cursor-not-allowed"
+                  className={`w-full py-3 ${
+                    isDemoMode
+                      ? 'bg-emerald-600 hover:bg-emerald-500 shadow-emerald-900/30'
+                      : 'bg-amber-600 hover:bg-amber-500 shadow-amber-900/30'
+                  } disabled:opacity-50 text-white font-semibold rounded-xl text-sm flex items-center justify-center gap-2 shadow-lg transition-all cursor-pointer disabled:cursor-not-allowed`}
                 >
                   {singleLoading ? (
                     <>
                       <RefreshCw className="w-4 h-4 animate-spin" />
-                      <span>Validating with BIRS Gateway...</span>
+                      <span>Validating with {isDemoMode ? 'Sandbox Engine' : 'BIRS Gateway'}...</span>
                     </>
                   ) : (
                     <>
                       <CheckCircle2 className="w-4 h-4" />
-                      <span>Verify NIN Now</span>
+                      <span>Verify NIN ({isDemoMode ? 'Sandbox' : 'Live Gateway'})</span>
                     </>
                   )}
                 </button>
@@ -1324,8 +1494,8 @@ export default function App() {
               <div className="pt-4 border-t border-slate-800 flex justify-end">
                 <button
                   type="button"
-                  onClick={() => alert('Settings updated and will apply to subsequent bot jobs.')}
-                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-semibold shadow"
+                  onClick={() => showToast('Settings updated successfully and will apply to subsequent bot jobs.', 'success')}
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-semibold shadow cursor-pointer transition-all"
                 >
                   Save Configuration
                 </button>
