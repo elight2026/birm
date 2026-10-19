@@ -1,36 +1,25 @@
 <!doctype html>
 <html lang="en">
   <head>
-    <meta charset="utf-8" />
+    <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>BIRS NIN Autonomous Verifier</title>
-    <link rel="icon" type="image/png" sizes="16x16" href="./icon16.png" />
-    <link rel="icon" type="image/png" sizes="48x48" href="./icon48.png" />
-    <link rel="icon" type="image/png" sizes="128x128" href="./icon128.png" />
-    <link rel="apple-touch-icon" sizes="128x128" href="./icon128.png" />
-    <link rel="shortcut icon" href="./favicon.ico" />
-    <script>
-      (function() {
-        var l = window.location;
-        var p = l.pathname.replace(/\/+$/, '');
-        var segs = p.split('/').filter(Boolean);
-        var repo = segs[0] || 'birm';
-        if (l.hostname.endsWith('github.io')) {
-          var target = '/' + repo + '/docs/' + l.search + l.hash;
-          l.replace(target);
-        } else {
-          l.replace('/' + l.search + l.hash);
-        }
-      })();
-    </script>
+    <title>BIRS NIN Autonomous Verifier &amp; Bot</title>
+    <meta name="description" content="Autonomous bulk National Identification Number (NIN) verification bot with background processing, Excel import/export, rate limiting, and automated retry system." />
+    <meta property="og:title" content="BIRS NIN Autonomous Verifier &amp; Bot" />
+    <meta property="og:description" content="Autonomous bulk National Identification Number (NIN) verification bot with background processing, Excel import/export, rate limiting, and automated retry system." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+
+    <!-- Favicon & Touch Icon Suite -->
+    <link rel="icon" type="image/png" sizes="16x16" href="./assets/icon16-48XHdx0a.png" />
+    <link rel="icon" type="image/png" sizes="48x48" href="./assets/icon48-BSwZzC52.png" />
+    <link rel="icon" type="image/png" sizes="128x128" href="./assets/icon128-BSPoKs7v.png" />
+    <link rel="apple-touch-icon" sizes="128x128" href="./assets/icon128-BSPoKs7v.png" />
+    <link rel="shortcut icon" href="./assets/icon48-BSwZzC52.png" />
+    <script type="module" crossorigin src="./assets/index-DIgrGeyT.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-B7D_LYNu.css">
   </head>
-  <body style="font-family: system-ui, -apple-system, sans-serif; background: #020617; color: #f8fafc; padding: 3rem 1.5rem; text-align: center;">
-    <div style="max-width: 480px; margin: 0 auto; background: #0f172a; padding: 2rem; border-radius: 1rem; border: 1px solid #1e293b;">
-      <h2 style="font-size: 1.25rem; font-weight: 700; margin-bottom: 0.5rem; color: #10b981;">BIRS NIN Autonomous Verifier</h2>
-      <p style="font-size: 0.875rem; color: #94a3b8; margin-bottom: 1.5rem;">Redirecting to the production verification portal...</p>
-      <a href="./docs/" style="display: inline-block; padding: 0.625rem 1.25rem; background: #10b981; color: white; border-radius: 0.5rem; text-decoration: none; font-weight: 600; font-size: 0.875rem;">
-        Open Portal &rarr;
-      </a>
-    </div>
+  <body>
+    <div id="root"></div>
   </body>
 </html>

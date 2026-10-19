@@ -1,16 +1,19 @@
 {
-  "buildTimestamp": "2026-10-19T15:03:00.591Z",
-  "target": "docs",
-  "totalFiles": 12,
-  "totalSizeKb": 1095.6,
+  "buildTimestamp": "2026-10-19T15:15:46.731Z",
+  "target": "dist & docs",
+  "totalFiles": 24,
+  "totalSizeKb": 2191,
   "categories": {
-    "html": 2,
-    "js": 1,
-    "css": 1,
-    "images": 7,
-    "other": 1
+    "html": 4,
+    "js": 2,
+    "css": 2,
+    "images": 14,
+    "other": 2
   },
-  "hasRelativeAssets": true,
+  "supportedUrls": [
+    "https://elight2026.github.io/birm/",
+    "https://elight2026.github.io/birm/docs/"
+  ],
   "files": [
     {
       "path": ".nojekyll",
@@ -39,6 +42,54 @@
     {
       "path": "assets/index-DIgrGeyT.js",
       "sizeKb": 1043.9
+    },
+    {
+      "path": "docs/.nojekyll",
+      "sizeKb": 0
+    },
+    {
+      "path": "docs/404.html",
+      "sizeKb": 1.5
+    },
+    {
+      "path": "docs/assets/icon128-BSPoKs7v.png",
+      "sizeKb": 0.7
+    },
+    {
+      "path": "docs/assets/icon16-48XHdx0a.png",
+      "sizeKb": 0.1
+    },
+    {
+      "path": "docs/assets/icon48-BSwZzC52.png",
+      "sizeKb": 0.3
+    },
+    {
+      "path": "docs/assets/index-B7D_LYNu.css",
+      "sizeKb": 46.2
+    },
+    {
+      "path": "docs/assets/index-DIgrGeyT.js",
+      "sizeKb": 1043.9
+    },
+    {
+      "path": "docs/favicon.ico",
+      "sizeKb": 0.3
+    },
+    {
+      "path": "docs/icon128.png",
+      "sizeKb": 0.7
+    },
+    {
+      "path": "docs/icon16.png",
+      "sizeKb": 0.1
+    },
+    {
+      "path": "docs/icon48.png",
+      "sizeKb": 0.3
+    },
+    {
+      "path": "docs/index.html",
+      "sizeKb": 1.5
     },
     {
       "path": "favicon.ico",
