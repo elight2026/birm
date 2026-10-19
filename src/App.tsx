@@ -56,8 +56,33 @@ import {
   FileCode,
   ShieldAlert,
   UserCheck,
-  KeyRound
+  KeyRound,
+  Activity,
+  Gauge,
+  Timer,
+  Filter,
+  Database,
+  Radio,
+  Puzzle,
+  TrendingUp,
+  BadgeCheck
 } from 'lucide-react';
+import type {
+  VerificationResult,
+  BotLog,
+  BotJob,
+  BotJobSettings,
+  BotJobStats,
+  TaxpayerDetails,
+  SingleLookupResult,
+  EngineMode,
+  ActiveTab,
+  ResultFilter,
+  LogFilter,
+  ExportFormat,
+  ExportFilter,
+  ToastNotification
+} from './types';
 import {
   ClientBotManager,
   exportResultsInBrowser,
@@ -66,17 +91,14 @@ import {
   downloadExtensionZip,
   verifyNinInBrowser,
   DEFAULT_GATEWAY_URL,
-  DEFAULT_MERCHANT_KEY,
-  type VerificationResult,
-  type BotLog,
-  type BotJob,
+  DEFAULT_MERCHANT_KEY
 } from './services/clientBotEngine';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'bot' | 'single' | 'standalone' | 'settings'>('bot');
+  const [activeTab, setActiveTab] = useState<ActiveTab>('bot');
   
   // Toast Notification State
-  const [toast, setToast] = useState<{ message: string; type: 'info' | 'success' | 'error' } | null>(null);
+  const [toast, setToast] = useState<ToastNotification | null>(null);
   const showToast = (message: string, type: 'info' | 'success' | 'error' = 'info') => {
     setToast({ message, type });
     setTimeout(() => {
@@ -85,7 +107,7 @@ export default function App() {
   };
 
   // Execution Engine & Server Detection State
-  const [engineMode, setEngineMode] = useState<'server' | 'browser'>('server');
+  const [engineMode, setEngineMode] = useState<EngineMode>('server');
   const [isServerAvailable, setIsServerAvailable] = useState<boolean | null>(null);
   const [showDeployGuide, setShowDeployGuide] = useState(false);
 
@@ -1154,25 +1176,48 @@ export default function App() {
 
                   {/* 4 Metrics Cards */}
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                    <div className="bg-slate-950 border border-slate-800/80 rounded-xl p-3 text-center">
-                      <span className="text-[11px] text-slate-400 block">Total NINs</span>
-                      <span className="text-xl font-bold text-white">{total}</span>
+                    <div className="bg-slate-950 border border-slate-800/80 rounded-xl p-3 flex flex-col justify-between">
+                      <div className="flex items-center justify-between text-slate-400 mb-1">
+                        <span className="text-[11px] font-medium">Total NINs</span>
+                        <div className="p-1 rounded-lg bg-slate-900 text-slate-400 border border-slate-800">
+                          <Layers className="w-3.5 h-3.5" />
+                        </div>
+                      </div>
+                      <span className="text-xl font-bold text-white tracking-tight">{total}</span>
                     </div>
-                    <div className="bg-slate-950 border border-slate-800/80 rounded-xl p-3 text-center">
-                      <span className="text-[11px] text-emerald-400 block font-medium">Verified OK</span>
-                      <span className="text-xl font-bold text-emerald-400">
+
+                    <div className="bg-slate-950 border border-slate-800/80 rounded-xl p-3 flex flex-col justify-between">
+                      <div className="flex items-center justify-between text-emerald-400 mb-1">
+                        <span className="text-[11px] font-medium">Verified OK</span>
+                        <div className="p-1 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                        </div>
+                      </div>
+                      <span className="text-xl font-bold text-emerald-400 tracking-tight">
                         {currentJob?.stats.success || 0}
                       </span>
                     </div>
-                    <div className="bg-slate-950 border border-slate-800/80 rounded-xl p-3 text-center">
-                      <span className="text-[11px] text-red-400 block font-medium">Not Found / Err</span>
-                      <span className="text-xl font-bold text-red-400">
+
+                    <div className="bg-slate-950 border border-slate-800/80 rounded-xl p-3 flex flex-col justify-between">
+                      <div className="flex items-center justify-between text-red-400 mb-1">
+                        <span className="text-[11px] font-medium">Not Found / Err</span>
+                        <div className="p-1 rounded-lg bg-red-500/10 text-red-400 border border-red-500/30">
+                          <XCircle className="w-3.5 h-3.5" />
+                        </div>
+                      </div>
+                      <span className="text-xl font-bold text-red-400 tracking-tight">
                         {currentJob?.stats.failed || 0}
                       </span>
                     </div>
-                    <div className="bg-slate-950 border border-slate-800/80 rounded-xl p-3 text-center">
-                      <span className="text-[11px] text-slate-400 block">Est. Remaining</span>
-                      <span className="text-lg font-bold text-slate-300">
+
+                    <div className="bg-slate-950 border border-slate-800/80 rounded-xl p-3 flex flex-col justify-between">
+                      <div className="flex items-center justify-between text-slate-400 mb-1">
+                        <span className="text-[11px] font-medium">Est. Remaining</span>
+                        <div className="p-1 rounded-lg bg-blue-500/10 text-blue-400 border border-blue-500/30">
+                          <Timer className="w-3.5 h-3.5" />
+                        </div>
+                      </div>
+                      <span className="text-lg font-bold text-slate-300 tracking-tight">
                         {currentJob?.status === 'running' && etaSeconds > 0
                           ? etaSeconds > 60
                             ? `${Math.floor(etaSeconds / 60)}m ${etaSeconds % 60}s`
@@ -1194,12 +1239,14 @@ export default function App() {
                       <div className="flex items-center gap-2">
                         <button
                           onClick={() => setLogFilter(logFilter === 'all' ? 'error' : 'all')}
-                          className="hover:text-slate-200 underline text-[11px]"
+                          className="hover:text-slate-200 text-[11px] flex items-center gap-1 bg-slate-900 hover:bg-slate-800 px-2 py-0.5 rounded-lg border border-slate-800 transition-colors cursor-pointer"
                         >
-                          {logFilter === 'all' ? 'Filter Errors' : 'Show All'}
+                          <Filter className="w-3 h-3 text-slate-400" />
+                          <span>{logFilter === 'all' ? 'Filter Errors' : 'Show All'}</span>
                         </button>
-                        <span className="text-[11px] bg-slate-800 px-1.5 py-0.5 rounded text-slate-400">
-                          {currentJob?.logs?.length || 0} logs
+                        <span className="text-[11px] bg-slate-800 px-1.5 py-0.5 rounded text-slate-400 flex items-center gap-1">
+                          <Activity className="w-3 h-3 text-slate-400" />
+                          <span>{currentJob?.logs?.length || 0} logs</span>
                         </span>
                       </div>
                     </div>
@@ -1239,7 +1286,7 @@ export default function App() {
                 {/* Export Bar */}
                 <div className="pt-3 border-t border-slate-800 mt-4 flex items-center justify-between flex-wrap gap-3">
                   <div className="flex items-center gap-2 text-xs text-slate-400">
-                    <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                    <TrendingUp className="w-4 h-4 text-emerald-400" />
                     <span>Rate: ~{throughputPerMin} NINs/min • Non-blocking server worker</span>
                   </div>
 
@@ -1249,7 +1296,7 @@ export default function App() {
                       onClick={() => handleDownloadExport('xlsx', 'all')}
                       className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 shadow transition-all cursor-pointer"
                     >
-                      <FileDown className="w-3.5 h-3.5" />
+                      <FileSpreadsheet className="w-3.5 h-3.5" />
                       <span>Export Excel (.xlsx)</span>
                     </button>
                     <button
@@ -1270,7 +1317,7 @@ export default function App() {
               <div className="flex flex-wrap items-center justify-between gap-4">
                 <div className="flex items-center gap-2">
                   <h3 className="text-base font-bold text-slate-100 flex items-center gap-2">
-                    <TableIcon className="w-4 h-4 text-emerald-400" />
+                    <Database className="w-4 h-4 text-emerald-400" />
                     <span>Verified Taxpayer Records</span>
                   </h3>
                   <span className="text-xs bg-slate-800 text-slate-300 px-2 py-0.5 rounded-full font-mono">
@@ -1588,7 +1635,7 @@ export default function App() {
                 <div className="bg-slate-950 border border-slate-800 rounded-xl p-5 flex flex-col justify-between hover:border-emerald-500/40 transition-all">
                   <div>
                     <div className="w-10 h-10 rounded-xl bg-emerald-600/20 text-emerald-400 border border-emerald-500/30 flex items-center justify-center mb-3">
-                      <Layers className="w-5 h-5" />
+                      <Puzzle className="w-5 h-5" />
                     </div>
                     <h3 className="text-sm font-bold text-white mb-1">
                       Chrome Extension v2.1
