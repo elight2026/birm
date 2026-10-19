@@ -31,6 +31,7 @@ export interface VerificationResult {
   verifiedAt: string;
   attempts: number;
   durationMs: number;
+  isCorsFallback?: boolean;
 }
 
 export interface BotLog {
@@ -83,6 +84,9 @@ export interface SingleLookupResult {
   message: string;
   details?: Record<string, any>;
   durationMs: number;
+  nin?: string;
+  timestamp?: string;
+  isCorsFallback?: boolean;
 }
 
 export type EngineMode = 'server' | 'browser';

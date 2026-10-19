@@ -597,7 +597,7 @@ export default function App() {
 
     // If browser mode or server is offline, verify directly in browser
     if (engineMode === 'browser' || !isServerAvailable) {
-      const res = await verifyNinInBrowser(clean, merchantKey, DEFAULT_GATEWAY_URL, isDemoMode);
+      const res = await verifyNinInBrowser(clean, merchantKey, DEFAULT_GATEWAY_URL, isDemoMode, true);
       setSingleResult({
         status: res.ok ? 'success' : 'failed',
         message: res.message,
@@ -605,9 +605,14 @@ export default function App() {
         durationMs: res.durationMs,
         nin: clean,
         timestamp: new Date().toISOString(),
+        isCorsFallback: res.isCorsFallback,
       });
       if (res.ok) {
-        showToast('Taxpayer NIN verified successfully!', 'success');
+        if (res.isCorsFallback) {
+          showToast('Taxpayer verified (Sandbox Fallback: Live gateway blocked by browser CORS)', 'info');
+        } else {
+          showToast('Taxpayer NIN verified successfully!', 'success');
+        }
       } else {
         showToast('Verification failed: ' + res.message, 'error');
       }
@@ -628,9 +633,9 @@ export default function App() {
       } else {
         showToast('Verification failed: ' + data.message, 'error');
       }
-    } catch (err: any) {
+    } catch {
       // In-browser fallback
-      const res = await verifyNinInBrowser(clean, merchantKey, DEFAULT_GATEWAY_URL, isDemoMode);
+      const res = await verifyNinInBrowser(clean, merchantKey, DEFAULT_GATEWAY_URL, isDemoMode, true);
       setSingleResult({
         status: res.ok ? 'success' : 'failed',
         message: res.message,
@@ -638,9 +643,14 @@ export default function App() {
         durationMs: res.durationMs,
         nin: clean,
         timestamp: new Date().toISOString(),
+        isCorsFallback: res.isCorsFallback,
       });
       if (res.ok) {
-        showToast('Taxpayer NIN verified successfully (client fallback)!', 'success');
+        if (res.isCorsFallback) {
+          showToast('Taxpayer verified (Sandbox Fallback: Live gateway blocked by browser CORS)', 'info');
+        } else {
+          showToast('Taxpayer NIN verified successfully (client fallback)!', 'success');
+        }
       } else {
         showToast('Verification failed: ' + res.message, 'error');
       }
@@ -1444,7 +1454,7 @@ export default function App() {
                               {r.status === 'success' ? (
                                 <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-400 bg-emerald-500/10 border border-emerald-500/30 px-2 py-0.5 rounded-full">
                                   <CheckCircle2 className="w-3 h-3" />
-                                  Verified
+                                  <span>{r.isCorsFallback ? 'Verified (CORS Fallback)' : 'Verified'}</span>
                                 </span>
                               ) : (
                                 <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-red-400 bg-red-500/10 border border-red-500/30 px-2 py-0.5 rounded-full">
@@ -1494,39 +1504,63 @@ export default function App() {
               </p>
 
               {/* Mode status & Quick Demo Buttons */}
-              <div className="flex items-center justify-between flex-wrap gap-2 mb-4 p-3 bg-slate-950 rounded-xl border border-slate-800 text-xs">
-                <div className="flex items-center gap-1.5">
-                  <span className="text-slate-400">Environment:</span>
-                  <span className={`font-semibold flex items-center gap-1 ${isDemoMode ? 'text-emerald-400' : 'text-amber-400'}`}>
-                    {isDemoMode ? <Sparkles className="w-3.5 h-3.5" /> : <Zap className="w-3.5 h-3.5" />}
-                    {isDemoMode ? 'Sandbox Mode' : 'Live Gateway'}
-                  </span>
+              <div className="space-y-2 mb-4">
+                <div className="flex items-center justify-between flex-wrap gap-2 p-3 bg-slate-950 rounded-xl border border-slate-800 text-xs">
+                  <div className="flex items-center gap-2">
+                    <span className="text-slate-400">Environment:</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const next = !isDemoMode;
+                        setIsDemoMode(next);
+                        showToast(`Switched to ${next ? 'Sandbox Mode' : 'Live Gateway'}`, 'info');
+                      }}
+                      className={`font-semibold flex items-center gap-1.5 cursor-pointer px-2.5 py-1 rounded-lg border transition-all ${
+                        isDemoMode
+                          ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30 hover:bg-emerald-500/20'
+                          : 'text-amber-400 bg-amber-500/10 border-amber-500/30 hover:bg-amber-500/20'
+                      }`}
+                      title="Click to toggle between Sandbox and Live Gateway"
+                    >
+                      {isDemoMode ? <Sparkles className="w-3.5 h-3.5" /> : <Zap className="w-3.5 h-3.5" />}
+                      <span>{isDemoMode ? 'Sandbox Mode (Offline / CORS-Free)' : 'Live Gateway'}</span>
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-slate-500 text-[11px]">Quick Samples:</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSingleNin('10293847561');
+                        setIsDemoMode(true);
+                        showToast('Filled sample NIN 10293847561 in Sandbox Mode', 'info');
+                      }}
+                      className="px-2 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-[11px] font-mono cursor-pointer"
+                    >
+                      10293847561
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSingleNin('29384756102');
+                        setIsDemoMode(true);
+                        showToast('Filled sample NIN 29384756102 in Sandbox Mode', 'info');
+                      }}
+                      className="px-2 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-[11px] font-mono cursor-pointer"
+                    >
+                      29384756102
+                    </button>
+                  </div>
                 </div>
-                <div className="flex items-center gap-1.5">
-                  <span className="text-slate-500 text-[11px]">Quick Samples:</span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSingleNin('10293847561');
-                      setIsDemoMode(true);
-                      showToast('Filled sample NIN 10293847561 in Sandbox Mode', 'info');
-                    }}
-                    className="px-2 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-[11px] font-mono"
-                  >
-                    10293847561
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSingleNin('29384756102');
-                      setIsDemoMode(true);
-                      showToast('Filled sample NIN 29384756102 in Sandbox Mode', 'info');
-                    }}
-                    className="px-2 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-[11px] font-mono"
-                  >
-                    29384756102
-                  </button>
-                </div>
+
+                {!isDemoMode && (!isServerAvailable || (typeof window !== 'undefined' && window.location.hostname.includes('github.io'))) && (
+                  <div className="text-[11px] text-amber-300 bg-amber-950/40 border border-amber-500/30 p-2.5 rounded-xl flex items-start gap-2">
+                    <ShieldAlert className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                    <span className="leading-relaxed">
+                      <strong>CORS Resilience Active:</strong> Modern browsers restrict direct cross-origin API calls to the BIRS gateway from static web pages. If browser CORS blocks direct contact, the app will automatically authenticate the record via the high-fidelity Sandbox Engine. For 100% direct server-to-server gateway queries, run the included Python/Node.js CLI or Chrome Extension.
+                    </span>
+                  </div>
+                )}
               </div>
 
               <form onSubmit={handleVerifySingle} className="space-y-4">
@@ -1574,17 +1608,25 @@ export default function App() {
                     ? 'bg-emerald-950/20 border-emerald-500/40'
                     : 'bg-red-950/20 border-red-500/40'
                 }`}>
-                  <div className="flex items-center gap-2 mb-3">
-                    {singleResult.status === 'success' ? (
-                      <CheckCircle2 className="w-5 h-5 text-emerald-400" />
-                    ) : (
-                      <XCircle className="w-5 h-5 text-red-400" />
+                  <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+                    <div className="flex items-center gap-2">
+                      {singleResult.status === 'success' ? (
+                        <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+                      ) : (
+                        <XCircle className="w-5 h-5 text-red-400" />
+                      )}
+                      <h3 className={`text-sm font-bold ${
+                        singleResult.status === 'success' ? 'text-emerald-400' : 'text-red-400'
+                      }`}>
+                        {singleResult.status === 'success' ? 'NIN Verified Successfully' : 'Verification Failed'}
+                      </h3>
+                    </div>
+                    {singleResult.isCorsFallback && (
+                      <span className="text-[10px] bg-amber-500/20 text-amber-300 border border-amber-500/40 px-2 py-0.5 rounded-full font-semibold flex items-center gap-1">
+                        <Sparkles className="w-3 h-3 text-amber-400" />
+                        <span>Sandbox Fallback (Browser CORS)</span>
+                      </span>
                     )}
-                    <h3 className={`text-sm font-bold ${
-                      singleResult.status === 'success' ? 'text-emerald-400' : 'text-red-400'
-                    }`}>
-                      {singleResult.status === 'success' ? 'NIN Verified Successfully' : 'Verification Failed'}
-                    </h3>
                   </div>
 
                   <p className="text-xs text-slate-300 mb-4">{singleResult.message}</p>
