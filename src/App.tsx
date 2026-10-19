@@ -39,7 +39,24 @@ import {
   HelpCircle,
   X,
   CheckCircle,
-  Info
+  Info,
+  SlidersHorizontal,
+  History,
+  ListFilter,
+  UploadCloud,
+  FileDown,
+  Fingerprint,
+  Building2,
+  Phone,
+  Calendar,
+  MapPin,
+  Hash,
+  Table as TableIcon,
+  MessageSquare,
+  FileCode,
+  ShieldAlert,
+  UserCheck,
+  KeyRound
 } from 'lucide-react';
 import {
   ClientBotManager,
@@ -800,7 +817,7 @@ export default function App() {
                     : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'
                 }`}
               >
-                <Settings className="w-4 h-4" />
+                <SlidersHorizontal className="w-4 h-4" />
                 <span>Settings</span>
               </button>
             </nav>
@@ -894,13 +911,14 @@ export default function App() {
 
               {/* Job Switcher Dropdown */}
               {jobList.length > 0 && (
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 bg-slate-950 px-3 py-1.5 rounded-xl border border-slate-800">
+                  <History className="w-3.5 h-3.5 text-slate-400" />
                   <span className="text-xs text-slate-400">Past Jobs:</span>
                   <select
                     value={currentJob?.id || ''}
                     onChange={(e) => handleSelectJob(e.target.value)}
                     aria-label="Select past job"
-                    className="bg-slate-800 border border-slate-700 text-slate-200 text-xs rounded-lg px-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                    className="bg-slate-800 border border-slate-700 text-slate-200 text-xs rounded-lg px-2.5 py-1 focus:outline-none focus:ring-1 focus:ring-emerald-500 cursor-pointer"
                   >
                     <option value="" disabled>Select Job</option>
                     {jobList.map((j) => (
@@ -909,6 +927,13 @@ export default function App() {
                       </option>
                     ))}
                   </select>
+                  <button
+                    onClick={fetchJobs}
+                    title="Refresh jobs"
+                    className="text-slate-400 hover:text-slate-200 p-1 hover:bg-slate-800 rounded transition-colors"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                  </button>
                 </div>
               )}
             </div>
@@ -941,7 +966,7 @@ export default function App() {
                       onChange={handleFileUpload}
                       className="hidden"
                     />
-                    <Upload className="w-6 h-6 text-slate-400 group-hover:text-emerald-400 transition-colors mb-2" />
+                    <UploadCloud className="w-7 h-7 text-slate-400 group-hover:text-emerald-400 transition-colors mb-2" />
                     <p className="text-xs font-medium text-slate-300">
                       {isUploading
                         ? 'Parsing spreadsheet...'
@@ -956,9 +981,13 @@ export default function App() {
 
                   {/* Raw Textarea input */}
                   <div>
-                    <label className="block text-xs font-medium text-slate-400 mb-1.5 flex justify-between">
-                      <span>Or paste NINs (one per line or comma-separated):</span>
-                      <span className="text-emerald-400 font-semibold">
+                    <label className="block text-xs font-medium text-slate-400 mb-1.5 flex justify-between items-center">
+                      <span className="flex items-center gap-1.5">
+                        <FileText className="w-3.5 h-3.5 text-slate-400" />
+                        <span>Or paste NINs (one per line or comma-separated):</span>
+                      </span>
+                      <span className="text-emerald-400 font-semibold flex items-center gap-1">
+                        <Fingerprint className="w-3.5 h-3.5" />
                         {parsedNins.length} valid 11-digit NINs
                       </span>
                     </label>
@@ -1220,7 +1249,7 @@ export default function App() {
                       onClick={() => handleDownloadExport('xlsx', 'all')}
                       className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 shadow transition-all cursor-pointer"
                     >
-                      <Download className="w-3.5 h-3.5" />
+                      <FileDown className="w-3.5 h-3.5" />
                       <span>Export Excel (.xlsx)</span>
                     </button>
                     <button
@@ -1228,6 +1257,7 @@ export default function App() {
                       onClick={() => handleDownloadExport('csv', 'success')}
                       className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-medium flex items-center gap-1.5 transition-all cursor-pointer"
                     >
+                      <FileText className="w-3.5 h-3.5 text-slate-400" />
                       <span>CSV (Success)</span>
                     </button>
                   </div>
@@ -1239,8 +1269,9 @@ export default function App() {
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
               <div className="flex flex-wrap items-center justify-between gap-4">
                 <div className="flex items-center gap-2">
-                  <h3 className="text-base font-bold text-slate-100">
-                    Verified Taxpayer Records
+                  <h3 className="text-base font-bold text-slate-100 flex items-center gap-2">
+                    <TableIcon className="w-4 h-4 text-emerald-400" />
+                    <span>Verified Taxpayer Records</span>
                   </h3>
                   <span className="text-xs bg-slate-800 text-slate-300 px-2 py-0.5 rounded-full font-mono">
                     {filteredResults.length} records
@@ -1252,31 +1283,32 @@ export default function App() {
                   <div className="bg-slate-950 p-1 rounded-xl border border-slate-800 flex items-center text-xs">
                     <button
                       onClick={() => setResultFilter('all')}
-                      className={`px-3 py-1 rounded-lg transition-all ${
+                      className={`px-3 py-1 rounded-lg transition-all flex items-center gap-1.5 ${
                         resultFilter === 'all' ? 'bg-slate-800 text-white font-medium' : 'text-slate-400'
                       }`}
                     >
-                      All ({currentJob?.results?.length || 0})
+                      <ListFilter className="w-3.5 h-3.5" />
+                      <span>All ({currentJob?.results?.length || 0})</span>
                     </button>
                     <button
                       onClick={() => setResultFilter('success')}
-                      className={`px-3 py-1 rounded-lg transition-all flex items-center gap-1 ${
+                      className={`px-3 py-1 rounded-lg transition-all flex items-center gap-1.5 ${
                         resultFilter === 'success'
                           ? 'bg-emerald-600/30 text-emerald-300 font-medium'
                           : 'text-slate-400'
                       }`}
                     >
-                      <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
-                      Success ({currentJob?.stats?.success || 0})
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>Success ({currentJob?.stats?.success || 0})</span>
                     </button>
                     <button
                       onClick={() => setResultFilter('failed')}
-                      className={`px-3 py-1 rounded-lg transition-all flex items-center gap-1 ${
+                      className={`px-3 py-1 rounded-lg transition-all flex items-center gap-1.5 ${
                         resultFilter === 'failed' ? 'bg-red-600/30 text-red-300 font-medium' : 'text-slate-400'
                       }`}
                     >
-                      <span className="w-2 h-2 rounded-full bg-red-400"></span>
-                      Failed ({currentJob?.stats?.failed || 0})
+                      <XCircle className="w-3.5 h-3.5 text-red-400" />
+                      <span>Failed ({currentJob?.stats?.failed || 0})</span>
                     </button>
                   </div>
 
@@ -1299,12 +1331,42 @@ export default function App() {
                 <table className="w-full text-left text-xs border-collapse">
                   <thead>
                     <tr className="bg-slate-950/80 text-slate-400 font-semibold border-b border-slate-800">
-                      <th className="py-3 px-4">NIN</th>
-                      <th className="py-3 px-4">Status</th>
-                      <th className="py-3 px-4">Full Name</th>
-                      <th className="py-3 px-4">Phone</th>
-                      <th className="py-3 px-4">DOB / Gender</th>
-                      <th className="py-3 px-4">Portal Message</th>
+                      <th className="py-3 px-4">
+                        <span className="flex items-center gap-1.5">
+                          <Fingerprint className="w-3.5 h-3.5 text-slate-500" />
+                          <span>NIN</span>
+                        </span>
+                      </th>
+                      <th className="py-3 px-4">
+                        <span className="flex items-center gap-1.5">
+                          <ShieldCheck className="w-3.5 h-3.5 text-slate-500" />
+                          <span>Status</span>
+                        </span>
+                      </th>
+                      <th className="py-3 px-4">
+                        <span className="flex items-center gap-1.5">
+                          <UserCheck className="w-3.5 h-3.5 text-slate-500" />
+                          <span>Full Name</span>
+                        </span>
+                      </th>
+                      <th className="py-3 px-4">
+                        <span className="flex items-center gap-1.5">
+                          <Phone className="w-3.5 h-3.5 text-slate-500" />
+                          <span>Mobile</span>
+                        </span>
+                      </th>
+                      <th className="py-3 px-4">
+                        <span className="flex items-center gap-1.5">
+                          <Calendar className="w-3.5 h-3.5 text-slate-500" />
+                          <span>DOB / Gender</span>
+                        </span>
+                      </th>
+                      <th className="py-3 px-4">
+                        <span className="flex items-center gap-1.5">
+                          <MessageSquare className="w-3.5 h-3.5 text-slate-500" />
+                          <span>Portal Message</span>
+                        </span>
+                      </th>
                       <th className="py-3 px-4 text-right">Action</th>
                     </tr>
                   </thead>
@@ -1422,8 +1484,9 @@ export default function App() {
 
               <form onSubmit={handleVerifySingle} className="space-y-4">
                 <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1.5">
-                    National Identification Number (11 digits):
+                  <label className="block text-xs font-medium text-slate-300 mb-1.5 flex items-center gap-1.5">
+                    <Fingerprint className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>National Identification Number (11 digits):</span>
                   </label>
                   <input
                     type="text"
@@ -1481,12 +1544,25 @@ export default function App() {
 
                   {singleResult.details && Object.keys(singleResult.details).length > 0 && (
                     <div className="space-y-2 bg-slate-950/80 p-3.5 rounded-lg border border-slate-800/80 text-xs">
-                      {Object.entries(singleResult.details).map(([k, v]) => (
-                        <div key={k} className="flex justify-between py-1 border-b border-slate-800/40 last:border-0">
-                          <span className="text-slate-400 font-medium">{k}:</span>
-                          <span className="text-slate-200 font-mono">{String(v)}</span>
-                        </div>
-                      ))}
+                      {Object.entries(singleResult.details).map(([k, v]) => {
+                        const icon =
+                          k.toLowerCase().includes('name') ? <UserCheck className="w-3.5 h-3.5 text-emerald-400" /> :
+                          k.toLowerCase().includes('mobile') || k.toLowerCase().includes('phone') ? <Phone className="w-3.5 h-3.5 text-blue-400" /> :
+                          k.toLowerCase().includes('birth') || k.toLowerCase().includes('dob') ? <Calendar className="w-3.5 h-3.5 text-amber-400" /> :
+                          k.toLowerCase().includes('address') ? <MapPin className="w-3.5 h-3.5 text-rose-400" /> :
+                          k.toLowerCase().includes('origin') || k.toLowerCase().includes('lga') || k.toLowerCase().includes('state') ? <Building2 className="w-3.5 h-3.5 text-purple-400" /> :
+                          <Hash className="w-3.5 h-3.5 text-slate-400" />;
+
+                        return (
+                          <div key={k} className="flex justify-between items-center py-1.5 border-b border-slate-800/40 last:border-0">
+                            <span className="text-slate-400 font-medium flex items-center gap-1.5">
+                              {icon}
+                              <span>{k}:</span>
+                            </span>
+                            <span className="text-slate-200 font-mono text-right max-w-xs break-words">{String(v)}</span>
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -1543,7 +1619,7 @@ export default function App() {
                 <div className="bg-slate-950 border border-slate-800 rounded-xl p-5 flex flex-col justify-between hover:border-emerald-500/40 transition-all">
                   <div>
                     <div className="w-10 h-10 rounded-xl bg-blue-600/20 text-blue-400 border border-blue-500/30 flex items-center justify-center mb-3">
-                      <Terminal className="w-5 h-5" />
+                      <FileCode className="w-5 h-5" />
                     </div>
                     <h3 className="text-sm font-bold text-white mb-1">
                       Python Autonomous Bot
@@ -1574,7 +1650,7 @@ export default function App() {
                 <div className="bg-slate-950 border border-slate-800 rounded-xl p-5 flex flex-col justify-between hover:border-emerald-500/40 transition-all">
                   <div>
                     <div className="w-10 h-10 rounded-xl bg-purple-600/20 text-purple-400 border border-purple-500/30 flex items-center justify-center mb-3">
-                      <FileText className="w-5 h-5" />
+                      <Terminal className="w-5 h-5" />
                     </div>
                     <h3 className="text-sm font-bold text-white mb-1">
                       Node.js Script (ESM)
@@ -1604,8 +1680,9 @@ export default function App() {
 
               {/* Terminal Instructions */}
               <div className="mt-8 pt-6 border-t border-slate-800">
-                <h4 className="text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">
-                  How to run the Python Bot on a server / VPS:
+                <h4 className="text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                  <Terminal className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>How to run the Python Bot on a server / VPS:</span>
                 </h4>
                 <div className="bg-slate-950 border border-slate-800 rounded-xl p-3.5 text-xs font-mono text-emerald-400 space-y-1">
                   <p className="text-slate-500"># 1. Install dependencies</p>
@@ -1619,8 +1696,9 @@ export default function App() {
 
               {/* Chrome Extension Instructions */}
               <div className="mt-6 pt-6 border-t border-slate-800">
-                <h4 className="text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">
-                  How to install the Chrome Extension:
+                <h4 className="text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                  <Layers className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>How to install the Chrome Extension:</span>
                 </h4>
                 <ol className="text-xs text-slate-400 list-decimal list-inside space-y-1.5">
                   <li>Download the .ZIP file above and extract it into a folder on your computer.</li>
@@ -1640,8 +1718,8 @@ export default function App() {
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-5">
               <div>
                 <h2 className="text-lg font-bold text-white mb-1 flex items-center gap-2">
-                  <Settings className="w-5 h-5 text-emerald-400" />
-                  Gateway &amp; Bot Engine Settings
+                  <SlidersHorizontal className="w-5 h-5 text-emerald-400" />
+                  <span>Gateway &amp; Bot Engine Settings</span>
                 </h2>
                 <p className="text-xs text-slate-400">
                   Configure the merchant authorization credentials and request throttles used by the verification engine.
@@ -1650,8 +1728,9 @@ export default function App() {
 
               <div className="space-y-4 text-xs">
                 <div>
-                  <label className="block text-slate-300 font-medium mb-1">
-                    BIRS Portal Merchant Key (X-MERCHANT-KEY):
+                  <label className="block text-slate-300 font-medium mb-1.5 flex items-center gap-1.5">
+                    <KeyRound className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>BIRS Portal Merchant Key (X-MERCHANT-KEY):</span>
                   </label>
                   <div className="flex items-center gap-2">
                     <input
@@ -1667,20 +1746,21 @@ export default function App() {
                         setCopiedKey(true);
                         setTimeout(() => setCopiedKey(false), 2000);
                       }}
-                      className="px-3 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl flex items-center gap-1 border border-slate-700"
+                      className="px-3 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl flex items-center gap-1 border border-slate-700 cursor-pointer"
                     >
                       {copiedKey ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
                       <span>Copy</span>
                     </button>
                   </div>
                   <p className="text-[11px] text-slate-500 mt-1">
-                    Default: <code className="text-slate-400">e6385c73adba4eb6807c0ec858fd8f5c</code> (Extracted from official BIRS portal bundle)
+                    Default: <code className="text-slate-400 font-mono">e6385c73adba4eb6807c0ec858fd8f5c</code> (Extracted from official BIRS portal bundle)
                   </p>
                 </div>
 
                 <div>
-                  <label className="block text-slate-300 font-medium mb-1">
-                    Gateway Validation Endpoint:
+                  <label className="block text-slate-300 font-medium mb-1.5 flex items-center gap-1.5">
+                    <Server className="w-3.5 h-3.5 text-blue-400" />
+                    <span>Gateway Validation Endpoint:</span>
                   </label>
                   <input
                     type="text"
@@ -1692,19 +1772,21 @@ export default function App() {
 
                 <div className="grid grid-cols-2 gap-4 pt-2">
                   <div>
-                    <label className="block text-slate-300 font-medium mb-1">
-                      Throttle Delay (ms):
+                    <label className="block text-slate-300 font-medium mb-1.5 flex items-center gap-1.5">
+                      <Clock className="w-3.5 h-3.5 text-amber-400" />
+                      <span>Throttle Delay (ms):</span>
                     </label>
                     <input
                       type="number"
                       value={delayMs}
                       onChange={(e) => setDelayMs(Number(e.target.value))}
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-slate-200"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-slate-200 focus:outline-none focus:border-emerald-500"
                     />
                   </div>
                   <div>
-                    <label className="block text-slate-300 font-medium mb-1">
-                      Max Retry Attempts:
+                    <label className="block text-slate-300 font-medium mb-1.5 flex items-center gap-1.5">
+                      <RotateCcw className="w-3.5 h-3.5 text-purple-400" />
+                      <span>Max Retry Attempts:</span>
                     </label>
                     <input
                       type="number"
@@ -1712,7 +1794,7 @@ export default function App() {
                       max="5"
                       value={maxRetries}
                       onChange={(e) => setMaxRetries(Number(e.target.value))}
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-slate-200"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-slate-200 focus:outline-none focus:border-emerald-500"
                     />
                   </div>
                 </div>

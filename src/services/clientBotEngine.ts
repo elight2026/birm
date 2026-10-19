@@ -1,59 +1,24 @@
 import * as XLSX from 'xlsx';
 import JSZip from 'jszip';
+import {
+  type VerificationResult,
+  type BotLog,
+  type BotJob,
+  type BotJobSettings,
+  type BotJobStats,
+  DEFAULT_GATEWAY_URL,
+  DEFAULT_MERCHANT_KEY
+} from './types';
 
-export interface VerificationResult {
-  nin: string;
-  status: 'success' | 'failed';
-  message: string;
-  details: Record<string, any>;
-  verifiedAt: string;
-  attempts: number;
-  durationMs: number;
-}
-
-export interface BotLog {
-  id: string;
-  timestamp: string;
-  level: 'info' | 'success' | 'warn' | 'error';
-  message: string;
-  nin?: string;
-}
-
-export interface BotJob {
-  id: string;
-  name: string;
-  status: 'running' | 'paused' | 'stopped' | 'completed' | 'failed';
-  createdAt: string;
-  startedAt?: string;
-  completedAt?: string;
-  totalNins: number;
-  queue: string[];
-  inFlight: string[];
-  results: VerificationResult[];
-  logs: BotLog[];
-  settings: {
-    delayMs: number;
-    jitterMs: number;
-    concurrency: number;
-    maxRetries: number;
-    timeoutMs: number;
-    merchantKey: string;
-    gatewayUrl: string;
-    autoRetry: boolean;
-    isDemo: boolean;
-  };
-  stats: {
-    total: number;
-    processed: number;
-    success: number;
-    failed: number;
-    retries: number;
-    avgTimeMs: number;
-  };
-}
-
-export const DEFAULT_GATEWAY_URL = 'https://service-gateway.bsg.com.ng/api/user-module/api/nin/validate';
-export const DEFAULT_MERCHANT_KEY = 'e6385c73adba4eb6807c0ec858fd8f5c';
+export {
+  type VerificationResult,
+  type BotLog,
+  type BotJob,
+  type BotJobSettings,
+  type BotJobStats,
+  DEFAULT_GATEWAY_URL,
+  DEFAULT_MERCHANT_KEY
+};
 
 // Deterministic Nigerian taxpayer generator for sandbox/testing
 export function generateMockTaxpayer(nin: string): Record<string, any> {
@@ -259,7 +224,7 @@ export class ClientBotManager {
       };
 
       job.results.unshift(verifiedResult);
-      job.inFlight = job.inFlight.filter((n) => n !== nin);
+      job.inFlight = job.inFlight.filter((n: string) => n !== nin);
       job.stats.processed++;
       if (success) {
         job.stats.success++;
@@ -272,7 +237,7 @@ export class ClientBotManager {
 
       // Update avg duration
       job.stats.avgTimeMs = Math.round(
-        job.results.reduce((acc, r) => acc + r.durationMs, 0) / Math.max(1, job.results.length)
+        job.results.reduce((acc: number, r: VerificationResult) => acc + r.durationMs, 0) / Math.max(1, job.results.length)
       );
 
       this.onUpdate({ ...job });
@@ -334,9 +299,9 @@ export function exportResultsInBrowser(
   format: 'xlsx' | 'csv' = 'xlsx',
   filter: 'all' | 'success' = 'all'
 ) {
-  const filtered = filter === 'success' ? job.results.filter((r) => r.status === 'success') : job.results;
+  const filtered = filter === 'success' ? job.results.filter((r: VerificationResult) => r.status === 'success') : job.results;
 
-  const rows = filtered.map((r) => {
+  const rows = filtered.map((r: VerificationResult) => {
     const details = r.details || {};
     return {
       'NIN': r.nin,
