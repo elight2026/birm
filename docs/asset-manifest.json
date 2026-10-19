@@ -1,0 +1,64 @@
+{
+  "buildTimestamp": "2026-10-19T14:18:59.177Z",
+  "target": "docs",
+  "totalFiles": 12,
+  "totalSizeKb": 1095.9,
+  "categories": {
+    "html": 2,
+    "js": 1,
+    "css": 1,
+    "images": 7,
+    "other": 1
+  },
+  "hasRelativeAssets": true,
+  "files": [
+    {
+      "path": ".nojekyll",
+      "sizeKb": 0
+    },
+    {
+      "path": "404.html",
+      "sizeKb": 1.5
+    },
+    {
+      "path": "assets/icon128-BSPoKs7v.png",
+      "sizeKb": 0.7
+    },
+    {
+      "path": "assets/icon16-48XHdx0a.png",
+      "sizeKb": 0.1
+    },
+    {
+      "path": "assets/icon48-BSwZzC52.png",
+      "sizeKb": 0.3
+    },
+    {
+      "path": "assets/index-3B8SfLX5.css",
+      "sizeKb": 46.5
+    },
+    {
+      "path": "assets/index-CF00p70U.js",
+      "sizeKb": 1043.9
+    },
+    {
+      "path": "favicon.ico",
+      "sizeKb": 0.3
+    },
+    {
+      "path": "icon128.png",
+      "sizeKb": 0.7
+    },
+    {
+      "path": "icon16.png",
+      "sizeKb": 0.1
+    },
+    {
+      "path": "icon48.png",
+      "sizeKb": 0.3
+    },
+    {
+      "path": "index.html",
+      "sizeKb": 1.5
+    }
+  ]
+}

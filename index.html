@@ -9,24 +9,30 @@
     <meta property="og:description" content="Autonomous bulk National Identification Number (NIN) verification bot with background processing, Excel import/export, rate limiting, and automated retry system." />
     <meta property="og:type" content="website" />
     <meta name="twitter:card" content="summary_large_image" />
-    <link rel="icon" type="image/png" href="./icon48.png" />
-  </head>
-  <body>
-    <div id="root"></div>
 
-    <!-- GitHub Pages Root Redirect Fallback: Only triggers when uncompiled repo root is served -->
-    <script>
+    <!-- Favicon & Touch Icon Suite -->
+    <link rel="icon" type="image/png" sizes="16x16" href="./icon16.png" />
+    <link rel="icon" type="image/png" sizes="48x48" href="./icon48.png" />
+    <link rel="icon" type="image/png" sizes="128x128" href="./icon128.png" />
+    <link rel="apple-touch-icon" sizes="128x128" href="./icon128.png" />
+    <link rel="shortcut icon" href="./favicon.ico" />
+
+    <!-- GitHub Pages SPA Routing & Subpath Redirect Fallback -->
+    <script id="gh-pages-redirect">
       (function() {
         if (typeof window !== 'undefined' && window.location.hostname.endsWith('github.io')) {
-          var isRawRoot = !document.querySelector('script[src*="assets/index"]');
           var p = window.location.pathname.replace(/\/+$/, '');
-          if (isRawRoot && !p.endsWith('/docs')) {
-            window.location.replace(p + '/docs/' + window.location.search + window.location.hash);
+          // If accessing repo root without /docs (e.g. https://elight2026.github.io/birm)
+          if (!p.endsWith('/docs') && !p.includes('/docs/')) {
+            var target = (p ? p : '') + '/docs/' + window.location.search + window.location.hash;
+            window.location.replace(target);
           }
         }
       })();
     </script>
-
+  </head>
+  <body>
+    <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

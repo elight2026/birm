@@ -1,26 +1,36 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
   <head>
-    <meta charset="utf-8">
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>BIRS NIN Autonomous Verifier</title>
+    <link rel="icon" type="image/png" sizes="16x16" href="./icon16.png" />
+    <link rel="icon" type="image/png" sizes="48x48" href="./icon48.png" />
+    <link rel="icon" type="image/png" sizes="128x128" href="./icon128.png" />
+    <link rel="apple-touch-icon" sizes="128x128" href="./icon128.png" />
+    <link rel="shortcut icon" href="./favicon.ico" />
     <script>
       (function() {
-        var host = window.location.hostname;
-        var p = window.location.pathname.replace(/\/+$/, '');
-        if (host.endsWith('github.io')) {
-          if (!p.includes('/docs')) {
-            window.location.replace(p + '/docs/' + window.location.search + window.location.hash);
-          } else {
-            window.location.replace(p + '/' + window.location.search + window.location.hash);
-          }
+        var l = window.location;
+        var p = l.pathname.replace(/\/+$/, '');
+        var segs = p.split('/').filter(Boolean);
+        var repo = segs[0] || 'birm';
+        if (l.hostname.endsWith('github.io')) {
+          var target = '/' + repo + '/docs/' + l.search + l.hash;
+          l.replace(target);
         } else {
-          window.location.replace('/' + window.location.search + window.location.hash);
+          l.replace('/' + l.search + l.hash);
         }
       })();
     </script>
   </head>
-  <body style="font-family: sans-serif; background: #020617; color: #f8fafc; padding: 2rem; text-align: center;">
-    <h2>Redirecting to BIRS NIN Autonomous Portal...</h2>
-    <p><a href="./docs/" style="color: #10b981;">Click here if you are not redirected automatically.</a></p>
+  <body style="font-family: system-ui, -apple-system, sans-serif; background: #020617; color: #f8fafc; padding: 3rem 1.5rem; text-align: center;">
+    <div style="max-width: 480px; margin: 0 auto; background: #0f172a; padding: 2rem; border-radius: 1rem; border: 1px solid #1e293b;">
+      <h2 style="font-size: 1.25rem; font-weight: 700; margin-bottom: 0.5rem; color: #10b981;">BIRS NIN Autonomous Verifier</h2>
+      <p style="font-size: 0.875rem; color: #94a3b8; margin-bottom: 1.5rem;">Redirecting to the production verification portal...</p>
+      <a href="./docs/" style="display: inline-block; padding: 0.625rem 1.25rem; background: #10b981; color: white; border-radius: 0.5rem; text-decoration: none; font-weight: 600; font-size: 0.875rem;">
+        Open Portal &rarr;
+      </a>
+    </div>
   </body>
 </html>
