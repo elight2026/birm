@@ -32,58 +32,28 @@ import {
   Code2,
   ExternalLink,
   ChevronDown,
-  Sparkles
+  Sparkles,
+  Globe,
+  Cpu,
+  Server,
+  HelpCircle,
+  X,
+  CheckCircle,
+  Info
 } from 'lucide-react';
-
-interface VerificationResult {
-  nin: string;
-  status: 'success' | 'failed';
-  message: string;
-  details: Record<string, any>;
-  verifiedAt: string;
-  attempts: number;
-  durationMs: number;
-}
-
-interface BotLog {
-  id: string;
-  timestamp: string;
-  level: 'info' | 'success' | 'warn' | 'error';
-  message: string;
-  nin?: string;
-}
-
-interface BotJob {
-  id: string;
-  name: string;
-  status: 'running' | 'paused' | 'stopped' | 'completed' | 'failed';
-  createdAt: string;
-  totalNins: number;
-  inFlight: string[];
-  queue?: string[];
-  results: VerificationResult[];
-  logs: BotLog[];
-  settings: {
-    delayMs: number;
-    jitterMs: number;
-    concurrency: number;
-    maxRetries: number;
-    timeoutMs: number;
-    merchantKey: string;
-    gatewayUrl: string;
-    autoRetry: boolean;
-  };
-  stats: {
-    total: number;
-    processed: number;
-    success: number;
-    failed: number;
-    retries: number;
-    avgTimeMs: number;
-  };
-}
-
-const DEFAULT_MERCHANT_KEY = 'e6385c73adba4eb6807c0ec858fd8f5c';
+import {
+  ClientBotManager,
+  exportResultsInBrowser,
+  downloadPythonBotScript,
+  downloadNodeBotScript,
+  downloadExtensionZip,
+  verifyNinInBrowser,
+  DEFAULT_GATEWAY_URL,
+  DEFAULT_MERCHANT_KEY,
+  type VerificationResult,
+  type BotLog,
+  type BotJob,
+} from './services/clientBotEngine';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<'bot' | 'single' | 'standalone' | 'settings'>('bot');
@@ -96,6 +66,11 @@ export default function App() {
       setToast((curr) => (curr?.message === message ? null : curr));
     }, 4500);
   };
+
+  // Execution Engine & Server Detection State
+  const [engineMode, setEngineMode] = useState<'server' | 'browser'>('server');
+  const [isServerAvailable, setIsServerAvailable] = useState<boolean | null>(null);
+  const [showDeployGuide, setShowDeployGuide] = useState(false);
 
   // Bot Batch State
   const [currentJob, setCurrentJob] = useState<BotJob | null>(null);
@@ -126,6 +101,50 @@ export default function App() {
   const [logFilter, setLogFilter] = useState<'all' | 'error'>('all');
   const [copiedKey, setCopiedKey] = useState(false);
 
+  // Client-Side Bot Manager (for standalone / GitHub Pages execution)
+  const clientBotManagerRef = useRef<ClientBotManager | null>(null);
+  if (!clientBotManagerRef.current) {
+    clientBotManagerRef.current = new ClientBotManager((updatedJob) => {
+      setCurrentJob({ ...updatedJob });
+      saveLocalJob(updatedJob);
+    });
+  }
+
+  // Local Storage persistence for static hosts (GitHub Pages)
+  const saveLocalJob = (job: BotJob) => {
+    try {
+      const stored = localStorage.getItem('birs_local_jobs');
+      let list: BotJob[] = stored ? JSON.parse(stored) : [];
+      const idx = list.findIndex((j) => j.id === job.id);
+      if (idx >= 0) {
+        list[idx] = job;
+      } else {
+        list.unshift(job);
+      }
+      localStorage.setItem('birs_local_jobs', JSON.stringify(list.slice(0, 30)));
+      setJobList(list);
+    } catch {
+      // ignore
+    }
+  };
+
+  const loadLocalJobs = () => {
+    try {
+      const stored = localStorage.getItem('birs_local_jobs');
+      if (stored) {
+        const parsed: BotJob[] = JSON.parse(stored);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setJobList(parsed);
+          if (!currentJobRef.current) {
+            setCurrentJob(parsed[0]);
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
+  };
+
   // Single NIN Testbench State
   const [singleNin, setSingleNin] = useState('');
   const [singleLoading, setSingleLoading] = useState(false);
@@ -143,9 +162,9 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
-  // Real-time SSE connection with polling fallback
+  // Real-time SSE connection with polling fallback (active only when server is available)
   useEffect(() => {
-    if (!currentJob?.id) return;
+    if (!currentJob?.id || engineMode !== 'server' || !isServerAvailable) return;
 
     let eventSource: EventSource | null = null;
     try {
@@ -233,7 +252,7 @@ export default function App() {
       if (eventSource) eventSource.close();
       clearInterval(pollJob);
     };
-  }, [currentJob?.id, currentJob?.status]);
+  }, [currentJob?.id, currentJob?.status, engineMode, isServerAvailable]);
 
   // Auto-scroll terminal
   useEffect(() => {
@@ -244,8 +263,13 @@ export default function App() {
 
   const fetchJobs = async () => {
     try {
-      const res = await fetch('/api/bot/jobs');
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 2000);
+      const res = await fetch('/api/bot/jobs', { signal: controller.signal });
+      clearTimeout(timeout);
+
       if (res.ok) {
+        setIsServerAvailable(true);
         const data = await res.json();
         const jobs = data.jobs || [];
         setJobList(jobs);
@@ -257,7 +281,7 @@ export default function App() {
             const d = await detailRes.json();
             setCurrentJob(d.job);
           }
-        } else if (currentJobRef.current) {
+        } else if (currentJobRef.current && engineMode === 'server') {
           const updated = jobs.find((j: any) => j.id === currentJobRef.current?.id);
           if (updated && updated.status !== currentJobRef.current.status) {
             const detailRes = await fetch(`/api/bot/jobs/${currentJobRef.current.id}`);
@@ -267,9 +291,17 @@ export default function App() {
             }
           }
         }
+      } else {
+        // Non-200 (e.g. static hosting on GitHub Pages)
+        setIsServerAvailable(false);
+        setEngineMode('browser');
+        loadLocalJobs();
       }
     } catch {
-      // error fetching jobs
+      // Server unreachable (static hosting / offline)
+      setIsServerAvailable(false);
+      setEngineMode('browser');
+      loadLocalJobs();
     }
   };
 
@@ -348,6 +380,48 @@ export default function App() {
       return;
     }
 
+    // In Browser Engine (GitHub Pages / Standalone static)
+    if (engineMode === 'browser' || !isServerAvailable) {
+      const jobId = 'local_' + Date.now();
+      const newJob: BotJob = {
+        id: jobId,
+        name: fileName ? `File: ${fileName}` : `Batch (${nins.length} NINs)`,
+        status: 'running',
+        createdAt: new Date().toISOString(),
+        totalNins: nins.length,
+        queue: [...nins],
+        inFlight: [],
+        results: [],
+        logs: [],
+        settings: {
+          delayMs,
+          jitterMs,
+          concurrency,
+          maxRetries,
+          timeoutMs: 25000,
+          merchantKey,
+          gatewayUrl: DEFAULT_GATEWAY_URL,
+          autoRetry,
+          isDemo: isDemoMode,
+        },
+        stats: {
+          total: nins.length,
+          processed: 0,
+          success: 0,
+          failed: 0,
+          retries: 0,
+          avgTimeMs: 0,
+        },
+      };
+
+      setCurrentJob(newJob);
+      saveLocalJob(newJob);
+      showToast(`In-Browser Bot started for ${nins.length} NINs [${isDemoMode ? 'Sandbox' : 'Live Gateway'}]`, 'success');
+      clientBotManagerRef.current?.runJob(newJob);
+      return;
+    }
+
+    // Server-Side Engine
     try {
       const res = await fetch('/api/bot/jobs', {
         method: 'POST',
@@ -366,7 +440,7 @@ export default function App() {
       });
 
       if (!res.ok) {
-        const err = await res.json();
+        const err = await res.json().catch(() => ({}));
         showToast('Failed to start bot: ' + (err.error || 'Unknown error'), 'error');
         return;
       }
@@ -386,6 +460,12 @@ export default function App() {
 
   const handlePauseBot = async () => {
     if (!currentJob) return;
+    if (engineMode === 'browser' || !isServerAvailable) {
+      clientBotManagerRef.current?.pauseJob(currentJob.id);
+      setCurrentJob((prev) => (prev ? { ...prev, status: 'paused' } : prev));
+      showToast('In-Browser Bot paused.', 'info');
+      return;
+    }
     await fetch(`/api/bot/jobs/${currentJob.id}/pause`, { method: 'POST' });
     setCurrentJob((prev) => (prev ? { ...prev, status: 'paused' } : prev));
     showToast('Autonomous bot paused.', 'info');
@@ -393,6 +473,12 @@ export default function App() {
 
   const handleResumeBot = async () => {
     if (!currentJob) return;
+    if (engineMode === 'browser' || !isServerAvailable) {
+      clientBotManagerRef.current?.resumeJob(currentJob.id);
+      setCurrentJob((prev) => (prev ? { ...prev, status: 'running' } : prev));
+      showToast('In-Browser Bot resumed.', 'info');
+      return;
+    }
     await fetch(`/api/bot/jobs/${currentJob.id}/resume`, { method: 'POST' });
     setCurrentJob((prev) => (prev ? { ...prev, status: 'running' } : prev));
     showToast('Autonomous bot resumed.', 'info');
@@ -400,6 +486,12 @@ export default function App() {
 
   const handleStopBot = async () => {
     if (!currentJob) return;
+    if (engineMode === 'browser' || !isServerAvailable) {
+      clientBotManagerRef.current?.stopJob(currentJob.id);
+      setCurrentJob((prev) => (prev ? { ...prev, status: 'stopped' } : prev));
+      showToast('In-Browser Bot execution stopped.', 'info');
+      return;
+    }
     await fetch(`/api/bot/jobs/${currentJob.id}/stop`, { method: 'POST' });
     setCurrentJob((prev) => (prev ? { ...prev, status: 'stopped' } : prev));
     showToast('Autonomous bot execution stopped.', 'info');
@@ -407,6 +499,31 @@ export default function App() {
 
   const handleRetryFailed = async () => {
     if (!currentJob) return;
+    if (engineMode === 'browser' || !isServerAvailable) {
+      const failedNins = currentJob.results.filter((r) => r.status === 'failed').map((r) => r.nin);
+      if (failedNins.length === 0) {
+        showToast('No failed NINs to retry in this batch.', 'info');
+        return;
+      }
+      const retriedJob: BotJob = {
+        ...currentJob,
+        status: 'running',
+        queue: [...failedNins],
+        inFlight: [],
+        results: currentJob.results.filter((r) => r.status !== 'failed'),
+        stats: {
+          ...currentJob.stats,
+          processed: currentJob.stats.processed - failedNins.length,
+          failed: 0,
+        },
+      };
+      setCurrentJob(retriedJob);
+      saveLocalJob(retriedJob);
+      showToast(`Retrying ${failedNins.length} failed NINs in browser...`, 'info');
+      clientBotManagerRef.current?.runJob(retriedJob);
+      return;
+    }
+
     const res = await fetch(`/api/bot/jobs/${currentJob.id}/retry-failed`, { method: 'POST' });
     if (res.ok) {
       const d = await fetch(`/api/bot/jobs/${currentJob.id}`).then((r) => r.json());
@@ -416,6 +533,11 @@ export default function App() {
   };
 
   const handleSelectJob = async (jobId: string) => {
+    if (engineMode === 'browser' || !isServerAvailable) {
+      const found = jobList.find((j: any) => j.id === jobId);
+      if (found) setCurrentJob(found);
+      return;
+    }
     const res = await fetch(`/api/bot/jobs/${jobId}`);
     if (res.ok) {
       const data = await res.json();
@@ -433,6 +555,27 @@ export default function App() {
     }
     setSingleLoading(true);
     setSingleResult(null);
+
+    // If browser mode or server is offline, verify directly in browser
+    if (engineMode === 'browser' || !isServerAvailable) {
+      const res = await verifyNinInBrowser(clean, merchantKey, DEFAULT_GATEWAY_URL, isDemoMode);
+      setSingleResult({
+        status: res.ok ? 'success' : 'failed',
+        message: res.message,
+        details: res.data || {},
+        durationMs: res.durationMs,
+        nin: clean,
+        timestamp: new Date().toISOString(),
+      });
+      if (res.ok) {
+        showToast('Taxpayer NIN verified successfully!', 'success');
+      } else {
+        showToast('Verification failed: ' + res.message, 'error');
+      }
+      setSingleLoading(false);
+      return;
+    }
+
     try {
       const res = await fetch('/api/verify', {
         method: 'POST',
@@ -447,39 +590,37 @@ export default function App() {
         showToast('Verification failed: ' + data.message, 'error');
       }
     } catch (err: any) {
+      // In-browser fallback
+      const res = await verifyNinInBrowser(clean, merchantKey, DEFAULT_GATEWAY_URL, isDemoMode);
       setSingleResult({
-        status: 'failed',
-        message: 'Network error or portal unreachable: ' + err.message,
-        details: {},
+        status: res.ok ? 'success' : 'failed',
+        message: res.message,
+        details: res.data || {},
+        durationMs: res.durationMs,
+        nin: clean,
+        timestamp: new Date().toISOString(),
       });
-      showToast('Network error contacting verification service', 'error');
+      if (res.ok) {
+        showToast('Taxpayer NIN verified successfully (client fallback)!', 'success');
+      } else {
+        showToast('Verification failed: ' + res.message, 'error');
+      }
     } finally {
       setSingleLoading(false);
     }
   };
 
-  // Safe client-side file exporter
+  // Safe client-side file exporter (works 100% reliably in any environment)
   const handleDownloadExport = async (format: 'xlsx' | 'csv', filter: 'all' | 'success') => {
     if (!currentJob || currentJob.results.length === 0) {
       showToast('No verification results to export yet. Run a verification job first.', 'error');
       return;
     }
     try {
-      const url = `/api/bot/jobs/${currentJob.id}/export?format=${format}&filter=${filter}`;
-      const res = await fetch(url);
-      if (!res.ok) throw new Error('Download failed');
-      const blob = await res.blob();
-      const blobUrl = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = blobUrl;
-      a.download = `BIRS_NIN_${currentJob.id}_${filter}.${format}`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(blobUrl);
-      showToast(`Exported ${format.toUpperCase()} (${filter}) successfully!`, 'success');
+      exportResultsInBrowser(currentJob, format, filter);
+      showToast(`Exported ${format.toUpperCase()} (${filter}) report successfully!`, 'success');
     } catch (err: any) {
-      showToast('Failed to download report: ' + err.message, 'error');
+      showToast('Failed to export report: ' + err.message, 'error');
     }
   };
 
@@ -575,6 +716,45 @@ export default function App() {
               </button>
             </div>
 
+            {/* Engine Selector */}
+            <button
+              type="button"
+              onClick={() => {
+                const next = engineMode === 'server' ? 'browser' : 'server';
+                setEngineMode(next);
+                showToast(`Switched execution mode to: ${next === 'browser' ? 'In-Browser Engine (Client-Side)' : 'Node.js Server Engine'}`, 'info');
+              }}
+              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs border font-medium transition-all ${
+                engineMode === 'browser' || !isServerAvailable
+                  ? 'bg-blue-950/60 text-blue-300 border-blue-500/40 hover:bg-blue-900/60'
+                  : 'bg-purple-950/60 text-purple-300 border-purple-500/40 hover:bg-purple-900/60'
+              }`}
+              title="Click to toggle between In-Browser and Node.js Server Engines"
+            >
+              {engineMode === 'browser' || !isServerAvailable ? (
+                <>
+                  <Cpu className="w-3.5 h-3.5 text-blue-400" />
+                  <span>Browser Engine</span>
+                </>
+              ) : (
+                <>
+                  <Server className="w-3.5 h-3.5 text-purple-400" />
+                  <span>Server Engine</span>
+                </>
+              )}
+            </button>
+
+            {/* GitHub Pages Deploy Guide Button */}
+            <button
+              type="button"
+              onClick={() => setShowDeployGuide(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-emerald-950/50 hover:bg-emerald-900/60 text-emerald-300 border border-emerald-500/40 shadow transition-all cursor-pointer"
+              title="GitHub Pages Fix & Deployment Setup Guide"
+            >
+              <Globe className="w-3.5 h-3.5 text-emerald-400" />
+              <span>GitHub Pages Fix</span>
+            </button>
+
             <nav className="flex items-center gap-1 bg-slate-800/80 p-1 rounded-xl border border-slate-700/60 text-xs font-medium">
               <button
                 onClick={() => setActiveTab('bot')}
@@ -627,6 +807,24 @@ export default function App() {
           </div>
         </div>
       </header>
+
+      {/* GitHub Pages / Static Hosting Top Notification */}
+      {(!isServerAvailable || typeof window !== 'undefined' && window.location.hostname.includes('github.io')) && (
+        <div className="bg-gradient-to-r from-emerald-950/80 via-slate-900 to-blue-950/80 border-b border-emerald-500/30 px-4 py-2 text-xs flex items-center justify-between gap-3 text-slate-300">
+          <div className="flex items-center gap-2 max-w-5xl">
+            <Globe className="w-4 h-4 text-emerald-400 shrink-0" />
+            <span>
+              <strong className="text-emerald-300 font-semibold">GitHub Pages Ready:</strong> Running in In-Browser Engine mode. Full bulk verification, logs, Excel/CSV export, and standalone script generators work directly in your browser.
+            </span>
+          </div>
+          <button
+            onClick={() => setShowDeployGuide(true)}
+            className="text-emerald-400 hover:text-emerald-300 underline font-semibold shrink-0 cursor-pointer text-xs"
+          >
+            How to fix elight2026.github.io/birm →
+          </button>
+        </div>
+      )}
 
       {/* Floating In-App Toast */}
       {toast && (
@@ -1328,14 +1526,17 @@ export default function App() {
                       <li>✓ Auto-exports results to Excel</li>
                     </ul>
                   </div>
-                  <a
-                    href="/api/extension/download"
-                    download="BIRS_NIN_Extension_v2.1.zip"
+                  <button
+                    type="button"
+                    onClick={() => {
+                      downloadExtensionZip();
+                      showToast('Downloading Chrome Extension .ZIP package...', 'success');
+                    }}
                     className="w-full py-2.5 px-3 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold rounded-xl flex items-center justify-center gap-1.5 shadow transition-all cursor-pointer"
                   >
                     <Download className="w-4 h-4" />
                     <span>Download Extension .ZIP</span>
-                  </a>
+                  </button>
                 </div>
 
                 {/* Card 2: Headless Python Bot */}
@@ -1356,14 +1557,17 @@ export default function App() {
                       <li>✓ Custom delay &amp; rate limit controls</li>
                     </ul>
                   </div>
-                  <a
-                    href="/api/standalone/python"
-                    download="birs_nin_bot.py"
+                  <button
+                    type="button"
+                    onClick={() => {
+                      downloadPythonBotScript();
+                      showToast('Downloading birs_bot.py...', 'success');
+                    }}
                     className="w-full py-2.5 px-3 bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold rounded-xl flex items-center justify-center gap-1.5 shadow transition-all cursor-pointer"
                   >
                     <Download className="w-4 h-4" />
                     <span>Download birs_nin_bot.py</span>
-                  </a>
+                  </button>
                 </div>
 
                 {/* Card 3: Headless Node.js Bot */}
@@ -1384,14 +1588,17 @@ export default function App() {
                       <li>✓ Easy process daemonization</li>
                     </ul>
                   </div>
-                  <a
-                    href="/api/standalone/node"
-                    download="birs_nin_bot.mjs"
+                  <button
+                    type="button"
+                    onClick={() => {
+                      downloadNodeBotScript();
+                      showToast('Downloading birs_nin_bot.mjs...', 'success');
+                    }}
                     className="w-full py-2.5 px-3 bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold rounded-xl flex items-center justify-center gap-1.5 shadow transition-all cursor-pointer"
                   >
                     <Download className="w-4 h-4" />
                     <span>Download birs_nin_bot.mjs</span>
-                  </a>
+                  </button>
                 </div>
               </div>
 
@@ -1588,6 +1795,118 @@ export default function App() {
                 className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-medium"
               >
                 Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* GitHub Pages Deployment Fix Modal */}
+      {showDeployGuide && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-700/80 rounded-2xl max-w-2xl w-full max-h-[90vh] flex flex-col p-6 shadow-2xl overflow-hidden animate-in fade-in duration-200">
+            <div className="flex justify-between items-start pb-4 border-b border-slate-800">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center justify-center">
+                  <Globe className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white">GitHub Pages Deployment Guide</h3>
+                  <p className="text-xs text-slate-400">
+                    Fixing blank page on <code className="text-emerald-400 font-mono">https://elight2026.github.io/birm/</code>
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowDeployGuide(false)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="overflow-y-auto flex-1 py-4 space-y-4 text-xs pr-1">
+              {/* Problem Diagnostic */}
+              <div className="bg-amber-950/40 border border-amber-500/30 rounded-xl p-4 space-y-2">
+                <div className="flex items-center gap-2 text-amber-300 font-semibold">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>Why was it showing a blank screen?</span>
+                </div>
+                <p className="text-slate-300 leading-relaxed">
+                  When GitHub Pages was enabled on the repository root, it served the uncompiled <code className="text-amber-200 font-mono">/index.html</code> which references <code className="text-amber-200 font-mono">/src/main.tsx</code>. Web browsers cannot execute raw TypeScript/TSX code and cannot find <code className="text-amber-200 font-mono">/src/main.tsx</code> directly, resulting in a blank screen.
+                </p>
+              </div>
+
+              {/* Solution 1: Recommended GitHub Actions */}
+              <div className="bg-slate-950 border border-emerald-500/40 rounded-xl p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-emerald-400 font-bold">
+                    <CheckCircle className="w-4 h-4 shrink-0" />
+                    <span>Option 1: Official GitHub Actions Workflow (Zero Config)</span>
+                  </div>
+                  <span className="text-[10px] bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded-full font-semibold border border-emerald-500/30">
+                    Recommended
+                  </span>
+                </div>
+                <p className="text-slate-300">
+                  We have added <code className="text-emerald-300 font-mono">.github/workflows/deploy.yml</code> to your repository. It automatically compiles Vite into static assets and deploys directly to GitHub Pages on every push.
+                </p>
+                <div className="bg-slate-900 border border-slate-800 rounded-lg p-3 space-y-2 text-slate-300">
+                  <p className="font-semibold text-slate-200">How to activate in 2 clicks:</p>
+                  <ol className="list-decimal list-inside space-y-1.5 text-slate-400 pl-1">
+                    <li>Open your repo: <a href="https://github.com/elight2026/birm/settings/pages" target="_blank" rel="noreferrer" className="text-emerald-400 underline font-mono">github.com/elight2026/birm/settings/pages</a></li>
+                    <li>Under <strong className="text-slate-200">Build and deployment &gt; Source</strong>: change dropdown from <em>"Deploy from a branch"</em> to <strong className="text-emerald-300">"GitHub Actions"</strong>.</li>
+                    <li>Push any commit to your repo (or trigger the workflow in the GitHub Actions tab).</li>
+                    <li>Done! The site will build and go live within 60 seconds without any 404 or blank screen.</li>
+                  </ol>
+                </div>
+              </div>
+
+              {/* Solution 2: Deploy from /docs branch folder */}
+              <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-3">
+                <div className="flex items-center gap-2 text-slate-200 font-bold">
+                  <Layers className="w-4 h-4 text-blue-400 shrink-0" />
+                  <span>Option 2: Deploy from /docs folder (Instant, No Actions Needed)</span>
+                </div>
+                <p className="text-slate-300">
+                  The pre-compiled production build with relative paths and <code className="text-slate-300 font-mono">.nojekyll</code> is already created in the <code className="text-blue-300 font-mono">/docs</code> folder of this project!
+                </p>
+                <div className="bg-slate-900 border border-slate-800 rounded-lg p-3 space-y-1.5 text-slate-400">
+                  <ol className="list-decimal list-inside space-y-1.5 pl-1">
+                    <li>Go to <strong className="text-slate-200">Settings &gt; Pages</strong> in your GitHub repository.</li>
+                    <li>Under <strong className="text-slate-200">Source</strong>, keep <strong className="text-slate-200">"Deploy from a branch"</strong>.</li>
+                    <li>Select Branch: <strong className="text-slate-200">main</strong>, and Folder: choose <strong className="text-blue-300">/docs</strong> (instead of /root).</li>
+                    <li>Click <strong className="text-slate-200">Save</strong>. Within 30 seconds, <code className="text-emerald-400 font-mono">https://elight2026.github.io/birm/</code> will render!</li>
+                  </ol>
+                </div>
+              </div>
+
+              {/* Client-Side Engine Highlight */}
+              <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-2">
+                <div className="flex items-center gap-2 text-blue-400 font-bold">
+                  <Cpu className="w-4 h-4 shrink-0" />
+                  <span>Client-Side Engine Active (No Backend Server Required)</span>
+                </div>
+                <p className="text-slate-400 leading-relaxed">
+                  GitHub Pages does not support Node.js backend processes. We built a full client-side bot engine into this app:
+                </p>
+                <ul className="text-slate-300 space-y-1 pl-1">
+                  <li>• Validates NINs with realistic deterministic Benue taxpayer records in Sandbox.</li>
+                  <li>• Supports direct BIRS Service Gateway queries.</li>
+                  <li>• Exports Excel (.xlsx) and CSV reports with SheetJS locally.</li>
+                  <li>• Retains job history via browser <code className="text-slate-400 font-mono">localStorage</code>.</li>
+                  <li>• Downloads standalone Node.js and Python CLI scripts directly from the browser.</li>
+                </ul>
+              </div>
+            </div>
+
+            <div className="pt-3 border-t border-slate-800 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setShowDeployGuide(false)}
+                className="px-5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-semibold cursor-pointer shadow transition-all"
+              >
+                Got It
               </button>
             </div>
           </div>
