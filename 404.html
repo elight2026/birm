@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>BIRS NIN Autonomous Verifier</title>
+    <script>
+      (function() {
+        var host = window.location.hostname;
+        var p = window.location.pathname.replace(/\/+$/, '');
+        if (host.endsWith('github.io')) {
+          if (!p.includes('/docs')) {
+            window.location.replace(p + '/docs/' + window.location.search + window.location.hash);
+          } else {
+            window.location.replace(p + '/' + window.location.search + window.location.hash);
+          }
+        } else {
+          window.location.replace('/' + window.location.search + window.location.hash);
+        }
+      })();
+    </script>
+  </head>
+  <body style="font-family: sans-serif; background: #020617; color: #f8fafc; padding: 2rem; text-align: center;">
+    <h2>Redirecting to BIRS NIN Autonomous Portal...</h2>
+    <p><a href="./docs/" style="color: #10b981;">Click here if you are not redirected automatically.</a></p>
+  </body>
+</html>

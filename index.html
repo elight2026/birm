@@ -9,10 +9,24 @@
     <meta property="og:description" content="Autonomous bulk National Identification Number (NIN) verification bot with background processing, Excel import/export, rate limiting, and automated retry system." />
     <meta property="og:type" content="website" />
     <meta name="twitter:card" content="summary_large_image" />
+    <link rel="icon" type="image/png" href="./icon48.png" />
   </head>
   <body>
     <div id="root"></div>
+
+    <!-- GitHub Pages Root Redirect Fallback: Only triggers when uncompiled repo root is served -->
+    <script>
+      (function() {
+        if (typeof window !== 'undefined' && window.location.hostname.endsWith('github.io')) {
+          var isRawRoot = !document.querySelector('script[src*="assets/index"]');
+          var p = window.location.pathname.replace(/\/+$/, '');
+          if (isRawRoot && !p.endsWith('/docs')) {
+            window.location.replace(p + '/docs/' + window.location.search + window.location.hash);
+          }
+        }
+      })();
+    </script>
+
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
-

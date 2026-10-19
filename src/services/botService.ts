@@ -7,7 +7,7 @@ import {
   VerificationResult,
   DEFAULT_GATEWAY_URL,
   DEFAULT_MERCHANT_KEY,
-} from './types';
+} from '../types';
 
 // Deterministic Nigerian taxpayer generator for sandbox/testing
 export function generateMockTaxpayer(nin: string): Record<string, any> {

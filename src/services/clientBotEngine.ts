@@ -8,7 +8,7 @@ import {
   type BotJobStats,
   DEFAULT_GATEWAY_URL,
   DEFAULT_MERCHANT_KEY
-} from './types';
+} from '../types';
 
 export {
   type VerificationResult,
