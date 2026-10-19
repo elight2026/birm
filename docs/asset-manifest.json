@@ -1,8 +1,8 @@
 {
-  "buildTimestamp": "2026-10-19T14:18:59.177Z",
+  "buildTimestamp": "2026-10-19T15:03:00.591Z",
   "target": "docs",
   "totalFiles": 12,
-  "totalSizeKb": 1095.9,
+  "totalSizeKb": 1095.6,
   "categories": {
     "html": 2,
     "js": 1,
@@ -33,11 +33,11 @@
       "sizeKb": 0.3
     },
     {
-      "path": "assets/index-3B8SfLX5.css",
-      "sizeKb": 46.5
+      "path": "assets/index-B7D_LYNu.css",
+      "sizeKb": 46.2
     },
     {
-      "path": "assets/index-CF00p70U.js",
+      "path": "assets/index-DIgrGeyT.js",
       "sizeKb": 1043.9
     },
     {
