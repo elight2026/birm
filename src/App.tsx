@@ -91,7 +91,8 @@ import {
   downloadExtensionZip,
   verifyNinInBrowser,
   DEFAULT_GATEWAY_URL,
-  DEFAULT_MERCHANT_KEY
+  DEFAULT_MERCHANT_KEY,
+  BIRS_DIRECT_PORTAL_URL
 } from './services/clientBotEngine';
 
 export default function App() {
@@ -853,6 +854,19 @@ export default function App() {
               <span>GitHub Pages Fix</span>
             </button>
 
+            {/* Direct Official BIRS Portal Link */}
+            <a
+              href={BIRS_DIRECT_PORTAL_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-blue-950/50 hover:bg-blue-900/60 text-blue-300 border border-blue-500/40 shadow transition-all"
+              title="Open official Benue State Internal Revenue Service taxpayer verification page directly (No CORS)"
+            >
+              <Building2 className="w-3.5 h-3.5 text-blue-400" />
+              <span>Official BIRS Portal</span>
+              <ExternalLink className="w-3 h-3 text-blue-400/80" />
+            </a>
+
             <nav className="flex items-center gap-1 bg-slate-800/80 p-1 rounded-xl border border-slate-700/60 text-xs font-medium">
               <button
                 onClick={() => setActiveTab('bot')}
@@ -909,18 +923,31 @@ export default function App() {
       {/* GitHub Pages / Static Hosting Top Notification */}
       {(!isServerAvailable || typeof window !== 'undefined' && window.location.hostname.includes('github.io')) && (
         <div className="bg-gradient-to-r from-emerald-950/80 via-slate-900 to-blue-950/80 border-b border-emerald-500/30 px-4 py-2 text-xs flex items-center justify-between gap-3 text-slate-300">
-          <div className="flex items-center gap-2 max-w-5xl">
+          <div className="flex items-center gap-2 max-w-4xl">
             <Globe className="w-4 h-4 text-emerald-400 shrink-0" />
             <span>
               <strong className="text-emerald-300 font-semibold">GitHub Pages Ready:</strong> Running in In-Browser Engine mode. Full bulk verification, logs, Excel/CSV export, and standalone script generators work directly in your browser.
             </span>
           </div>
-          <button
-            onClick={() => setShowDeployGuide(true)}
-            className="text-emerald-400 hover:text-emerald-300 underline font-semibold shrink-0 cursor-pointer text-xs"
-          >
-            How to fix elight2026.github.io/birm →
-          </button>
+          <div className="flex items-center gap-3 shrink-0">
+            <a
+              href={BIRS_DIRECT_PORTAL_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-emerald-300 hover:text-white underline font-semibold flex items-center gap-1 text-xs"
+              title="Verify directly on official Benue State Internal Revenue Service page without CORS"
+            >
+              <span>Direct BIRS Page</span>
+              <ExternalLink className="w-3 h-3" />
+            </a>
+            <span className="text-slate-600">|</span>
+            <button
+              onClick={() => setShowDeployGuide(true)}
+              className="text-emerald-400 hover:text-emerald-300 underline font-semibold shrink-0 cursor-pointer text-xs"
+            >
+              How to fix elight2026.github.io/birm →
+            </button>
+          </div>
         </div>
       )}
 
@@ -1521,13 +1548,29 @@ export default function App() {
                               {r.message}
                             </td>
                             <td className="py-2.5 px-4 text-right">
-                              <button
-                                onClick={() => setSelectedResult(r)}
-                                className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-lg text-xs font-sans flex items-center gap-1 ml-auto"
-                              >
-                                <Eye className="w-3 h-3" />
-                                Details
-                              </button>
+                              <div className="flex items-center justify-end gap-1.5">
+                                <button
+                                  onClick={() => setSelectedResult(r)}
+                                  className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-lg text-xs font-sans flex items-center gap-1 cursor-pointer"
+                                >
+                                  <Eye className="w-3 h-3" />
+                                  Details
+                                </button>
+                                <a
+                                  href={BIRS_DIRECT_PORTAL_URL}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  onClick={() => {
+                                    navigator.clipboard?.writeText(r.nin);
+                                    showToast(`Copied NIN ${r.nin}! Opening official BIRS portal...`, 'info');
+                                  }}
+                                  className="px-2 py-1 bg-emerald-950/60 hover:bg-emerald-900/80 text-emerald-300 border border-emerald-500/30 rounded-lg text-xs font-sans flex items-center gap-1 transition-all"
+                                  title="Copy NIN and open official BIRS taxpayer verification page (No CORS)"
+                                >
+                                  <ExternalLink className="w-3 h-3" />
+                                  <span>BIRS Direct</span>
+                                </a>
+                              </div>
                             </td>
                           </tr>
                         );
@@ -1650,23 +1693,61 @@ export default function App() {
                   />
                 </div>
 
-                <button
-                  type="submit"
-                  disabled={singleLoading || singleNin.length !== 11}
-                  className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 shadow-emerald-900/30 disabled:opacity-50 text-white font-semibold rounded-xl text-sm flex items-center justify-center gap-2 shadow-lg transition-all cursor-pointer disabled:cursor-not-allowed"
-                >
-                  {singleLoading ? (
-                    <>
-                      <RefreshCw className="w-4 h-4 animate-spin" />
-                      <span>Validating against BIRS Gateway...</span>
-                    </>
-                  ) : (
-                    <>
-                      <CheckCircle2 className="w-4 h-4" />
-                      <span>Verify NIN ({isDemoMode ? 'Simulated Sandbox' : 'Real Live Gateway'})</span>
-                    </>
-                  )}
-                </button>
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <button
+                    type="submit"
+                    disabled={singleLoading || singleNin.length !== 11}
+                    className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-500 shadow-emerald-900/30 disabled:opacity-50 text-white font-semibold rounded-xl text-sm flex items-center justify-center gap-2 shadow-lg transition-all cursor-pointer disabled:cursor-not-allowed"
+                  >
+                    {singleLoading ? (
+                      <>
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                        <span>Validating against BIRS Gateway...</span>
+                      </>
+                    ) : (
+                      <>
+                        <CheckCircle2 className="w-4 h-4" />
+                        <span>Verify NIN ({isDemoMode ? 'Simulated Sandbox' : 'Real Live Gateway'})</span>
+                      </>
+                    )}
+                  </button>
+
+                  <a
+                    href={BIRS_DIRECT_PORTAL_URL}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={() => {
+                      if (singleNin.length === 11) {
+                        navigator.clipboard?.writeText(singleNin);
+                        showToast(`Copied NIN ${singleNin}! Opening official BIRS portal...`, 'info');
+                      } else {
+                        showToast('Opening official BIRS portal...', 'info');
+                      }
+                    }}
+                    className="py-3 px-4 bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-slate-700 hover:border-emerald-500/40 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer shrink-0"
+                    title="Open official Benue State Internal Revenue Service page directly without CORS restrictions"
+                  >
+                    <Building2 className="w-4 h-4 text-emerald-400" />
+                    <span>Open Direct BIRS Page</span>
+                    <ExternalLink className="w-3.5 h-3.5 text-slate-400" />
+                  </a>
+                </div>
+
+                <div className="flex items-center justify-between text-[11px] text-slate-400 px-1 pt-0.5">
+                  <span className="flex items-center gap-1">
+                    <Globe className="w-3.5 h-3.5 text-slate-500" />
+                    <span>Official Verification Page (No CORS):</span>
+                  </span>
+                  <a
+                    href={BIRS_DIRECT_PORTAL_URL}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-emerald-400 hover:text-emerald-300 font-mono underline flex items-center gap-1"
+                  >
+                    <span>birs.be.gov.ng/taxpayer-information</span>
+                    <ExternalLink className="w-3 h-3" />
+                  </a>
+                </div>
               </form>
 
               {singleResult && (
@@ -1711,8 +1792,63 @@ export default function App() {
                         <div>
                           <h4 className="text-xs font-bold text-amber-300">Browser CORS Restriction on Static Hosting</h4>
                           <p className="text-[11px] text-slate-300 mt-1 leading-relaxed">
-                            Your browser blocked direct connection from this static webpage to the Nigerian BIRS identity gateway (<code>service-gateway.bsg.com.ng</code>). <strong>No fake data was generated.</strong> To run 100% genuine verification:
+                            Your browser blocked direct connection from this static webpage to the Nigerian BIRS identity gateway (<code>service-gateway.bsg.com.ng</code>). <strong>No fake data was generated.</strong>
                           </p>
+                        </div>
+                      </div>
+
+                      {/* Direct BIRS Portal Action Banner */}
+                      <div className="p-3.5 bg-gradient-to-r from-emerald-950/90 via-slate-900 to-slate-950 border-2 border-emerald-500/60 rounded-xl space-y-2.5 shadow-lg">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-bold text-emerald-300 flex items-center gap-1.5">
+                            <Building2 className="w-4 h-4 text-emerald-400" />
+                            Direct Solution: Official BIRS Portal Page
+                          </span>
+                          <span className="text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 px-2 py-0.5 rounded-full font-semibold">
+                            100% Genuine • No CORS
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-200 leading-relaxed">
+                          To avoid this browser CORS block entirely, open the official Benue State Internal Revenue Service verification page directly:
+                        </p>
+                        <div className="flex items-center gap-2 bg-slate-950/90 p-2 rounded-lg border border-slate-800">
+                          <Globe className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                          <a
+                            href={BIRS_DIRECT_PORTAL_URL}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-xs font-mono text-emerald-400 hover:text-emerald-300 underline font-semibold flex items-center gap-1 break-all"
+                          >
+                            <span>{BIRS_DIRECT_PORTAL_URL}</span>
+                            <ExternalLink className="w-3 h-3 shrink-0" />
+                          </a>
+                        </div>
+                        <div className="flex flex-wrap gap-2 pt-1">
+                          <a
+                            href={BIRS_DIRECT_PORTAL_URL}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={() => {
+                              if (singleResult?.nin) {
+                                navigator.clipboard?.writeText(singleResult.nin);
+                                showToast(`Copied NIN ${singleResult.nin} to clipboard! Opening official BIRS portal...`, 'success');
+                              }
+                            }}
+                            className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 shadow transition-all cursor-pointer"
+                          >
+                            <Copy className="w-3.5 h-3.5" />
+                            <span>Copy NIN ({singleResult.nin}) &amp; Open BIRS Portal</span>
+                            <ExternalLink className="w-3.5 h-3.5" />
+                          </a>
+                          <a
+                            href={BIRS_DIRECT_PORTAL_URL}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-all"
+                          >
+                            <ExternalLink className="w-3.5 h-3.5 text-slate-400" />
+                            <span>Open Direct Page</span>
+                          </a>
                         </div>
                       </div>
 
@@ -2018,6 +2154,42 @@ export default function App() {
                   </p>
                 </div>
 
+                {/* Official BIRS Direct Verification Page */}
+                <div className="p-3.5 bg-gradient-to-r from-emerald-950/40 via-slate-950 to-slate-950 border border-emerald-500/30 rounded-xl space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="font-semibold text-emerald-300 flex items-center gap-1.5">
+                      <Building2 className="w-4 h-4 text-emerald-400" />
+                      <span>Official BIRS Verification Page</span>
+                    </span>
+                    <span className="text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 px-2 py-0.5 rounded-full font-semibold">
+                      Direct Web Page
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-400 leading-relaxed">
+                    Benue State Internal Revenue Service official portal page for direct manual taxpayer information verification without CORS limitations:
+                  </p>
+                  <div className="flex items-center justify-between pt-1">
+                    <a
+                      href={BIRS_DIRECT_PORTAL_URL}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-xs font-mono text-emerald-400 hover:text-emerald-300 underline flex items-center gap-1"
+                    >
+                      <span>{BIRS_DIRECT_PORTAL_URL}</span>
+                      <ExternalLink className="w-3.5 h-3.5" />
+                    </a>
+                    <a
+                      href={BIRS_DIRECT_PORTAL_URL}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold flex items-center gap-1 shadow transition-all"
+                    >
+                      <span>Open Portal</span>
+                      <ExternalLink className="w-3 h-3" />
+                    </a>
+                  </div>
+                </div>
+
                 {/* Relay Proxy URL Configuration for GitHub Pages / CORS Bypass */}
                 <div className="pt-2 border-t border-slate-800">
                   <div className="flex items-center justify-between mb-1.5">
@@ -2188,10 +2360,26 @@ export default function App() {
               </div>
             </div>
 
-            <div className="pt-2 border-t border-slate-800 flex justify-end">
+            <div className="pt-2 border-t border-slate-800 flex items-center justify-between gap-2">
+              <a
+                href={BIRS_DIRECT_PORTAL_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={() => {
+                  if (selectedResult?.nin) {
+                    navigator.clipboard?.writeText(selectedResult.nin);
+                    showToast(`Copied NIN ${selectedResult.nin}! Opening official BIRS portal...`, 'info');
+                  }
+                }}
+                className="px-3 py-1.5 bg-emerald-600/30 hover:bg-emerald-600/50 border border-emerald-500/40 text-emerald-300 rounded-xl text-xs font-medium flex items-center gap-1.5 transition-all"
+                title="Open official Benue State Internal Revenue Service taxpayer verification page directly (No CORS)"
+              >
+                <ExternalLink className="w-3.5 h-3.5" />
+                <span>Verify on Official BIRS Portal Direct</span>
+              </a>
               <button
                 onClick={() => setSelectedResult(null)}
-                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-medium"
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-medium cursor-pointer"
               >
                 Close
               </button>
@@ -2296,6 +2484,42 @@ export default function App() {
                   <li>• Retains job history via browser <code className="text-slate-400 font-mono">localStorage</code>.</li>
                   <li>• Downloads standalone Node.js and Python CLI scripts directly from the browser.</li>
                 </ul>
+              </div>
+
+              {/* Direct Official Portal Access */}
+              <div className="bg-slate-950 border border-emerald-500/40 rounded-xl p-4 space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-emerald-400 font-bold">
+                    <Building2 className="w-4 h-4 shrink-0" />
+                    <span>Avoid Browser CORS: Direct Official BIRS Page</span>
+                  </div>
+                  <span className="text-[10px] bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded-full font-semibold border border-emerald-500/30">
+                    No CORS Block
+                  </span>
+                </div>
+                <p className="text-slate-300 leading-relaxed">
+                  Because <code>service-gateway.bsg.com.ng</code> rejects direct cross-origin browser requests from static origins like GitHub Pages, you can also verify any taxpayer directly on the official Benue State Internal Revenue Service web page:
+                </p>
+                <div className="flex items-center justify-between bg-slate-900 p-2.5 rounded-lg border border-slate-800">
+                  <a
+                    href={BIRS_DIRECT_PORTAL_URL}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-emerald-400 hover:text-emerald-300 font-mono text-xs underline flex items-center gap-1 font-semibold"
+                  >
+                    <span>{BIRS_DIRECT_PORTAL_URL}</span>
+                    <ExternalLink className="w-3.5 h-3.5" />
+                  </a>
+                  <a
+                    href={BIRS_DIRECT_PORTAL_URL}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold flex items-center gap-1"
+                  >
+                    <span>Open Direct Page</span>
+                    <ExternalLink className="w-3 h-3" />
+                  </a>
+                </div>
               </div>
             </div>
 

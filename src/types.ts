@@ -115,3 +115,4 @@ export interface ToastNotification {
 
 export const DEFAULT_GATEWAY_URL = 'https://service-gateway.bsg.com.ng/api/user-module/api/nin/validate';
 export const DEFAULT_MERCHANT_KEY = 'e6385c73adba4eb6807c0ec858fd8f5c';
+export const BIRS_DIRECT_PORTAL_URL = 'https://birs.be.gov.ng/taxpayer-information';

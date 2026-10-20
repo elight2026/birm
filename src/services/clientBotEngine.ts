@@ -7,7 +7,8 @@ import {
   type BotJobSettings,
   type BotJobStats,
   DEFAULT_GATEWAY_URL,
-  DEFAULT_MERCHANT_KEY
+  DEFAULT_MERCHANT_KEY,
+  BIRS_DIRECT_PORTAL_URL
 } from '../types';
 
 export {
@@ -17,7 +18,8 @@ export {
   type BotJobSettings,
   type BotJobStats,
   DEFAULT_GATEWAY_URL,
-  DEFAULT_MERCHANT_KEY
+  DEFAULT_MERCHANT_KEY,
+  BIRS_DIRECT_PORTAL_URL
 };
 
 // Deterministic Nigerian taxpayer generator exclusively for explicit simulated Demo Mode
@@ -347,7 +349,7 @@ export async function verifyNinInBrowser(
     if (err?.name === 'AbortError') {
       msg = 'Gateway Timeout: BIRS portal took longer than 25s to respond.';
     } else if (isCors) {
-      msg = 'Browser CORS blocked direct gateway access: service-gateway.bsg.com.ng does not allow direct cross-origin browser requests from static origins like github.io.';
+      msg = `Browser CORS blocked direct gateway access: service-gateway.bsg.com.ng does not allow direct cross-origin browser requests from static origins like github.io. Open direct page: ${BIRS_DIRECT_PORTAL_URL}`;
     }
 
     return {
