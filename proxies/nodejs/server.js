@@ -32,6 +32,17 @@ app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', service: 'BIRS Node.js Proxy', timestamp: new Date().toISOString() });
 });
 
+// GET probes for /api/verify to prevent HTTP 405
+app.get(['/api/verify', '/api/validate', '/api/proxy'], (_req, res) => {
+  res.json({
+    status: 'ok',
+    service: 'BIRS Node.js Proxy',
+    message: 'Proxy is live and ready. Send POST with { "nin": "12345678901" } to verify.',
+    gateway: DEFAULT_GATEWAY,
+    timestamp: new Date().toISOString()
+  });
+});
+
 // Verification Proxy Handler
 async function handleVerification(req, res) {
   const { nin, merchantKey, gatewayUrl } = req.body || {};

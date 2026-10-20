@@ -46,6 +46,12 @@ func verifyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if r.Method == http.MethodGet || r.Method == http.MethodHead {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"status":"ok","service":"BIRS Go Proxy","message":"Endpoint is live. Send POST with { 'nin': '12345678901' } to verify."}`))
+		return
+	}
+
 	if r.Method != http.MethodPost {
 		http.Error(w, `{"error":"Method not allowed"}`, http.StatusMethodNotAllowed)
 		return

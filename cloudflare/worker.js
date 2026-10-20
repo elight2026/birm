@@ -26,6 +26,17 @@ export default {
       return new Response(null, { headers: CORS_HEADERS });
     }
 
+    if (request.method === 'GET' || request.method === 'HEAD') {
+      return new Response(JSON.stringify({
+        status: 'ok',
+        service: 'BIRS Cloudflare Worker Proxy',
+        message: 'Proxy is live and active. Send POST with { "nin": "12345678901" } to verify.',
+      }), {
+        status: 200,
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      });
+    }
+
     if (request.method !== 'POST') {
       return new Response(JSON.stringify({ error: 'Use POST' }), {
         status: 405,

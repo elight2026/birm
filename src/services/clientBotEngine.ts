@@ -1123,38 +1123,84 @@ export async function testProxyConnection(
     return {
       ok: false,
       latencyMs: 0,
-      message: 'Proxy URL is empty. Please enter a valid URL (e.g. https://my-birs-proxy.onrender.com).',
+      message: 'Proxy URL is empty. Please enter a valid URL (e.g. https://my-birs-proxy.onrender.com or http://localhost:3000).',
       endpointTested: '',
+    };
+  }
+
+  // Detect static GitHub Pages entered by mistake
+  if (cleanUrl.includes('github.io')) {
+    return {
+      ok: false,
+      latencyMs: 0,
+      message: 'GitHub Pages (github.io) is a static hosting platform and cannot run a server-side proxy (it rejects POST with HTTP 405 Method Not Allowed). Please deploy the proxy on a backend platform like Render.com (free), Vercel, Railway, or your local Node.js server (http://localhost:3000).',
+      endpointTested: cleanUrl,
     };
   }
 
   const start = performance.now();
   try {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 9000);
+    const timer = setTimeout(() => controller.abort(), 12000);
 
-    // 1. Try health check endpoint
-    const healthUrl = cleanUrl.endsWith('/api/health') ? cleanUrl : `${cleanUrl}/api/health`;
-    let res = await fetch(healthUrl, { method: 'GET', signal: controller.signal }).catch(() => null);
+    // Compute both endpoint variants
+    const baseUrl = cleanUrl.replace(/\/api\/verify\/?$/, '').replace(/\/verify\/?$/, '').replace(/\/api\/health\/?$/, '').replace(/\/$/, '');
+    const verifyUrl = cleanUrl.endsWith('/api/verify') || cleanUrl.endsWith('/verify')
+      ? cleanUrl
+      : `${baseUrl}/api/verify`;
+    const healthUrl = `${baseUrl}/api/health`;
 
-    let endpointUsed = healthUrl;
+    let res: Response | null = null;
+    let endpointUsed = verifyUrl;
 
-    // 2. If health not found, try root /
-    if (!res || !res.ok) {
-      res = await fetch(cleanUrl, { method: 'GET', signal: controller.signal }).catch(() => null);
-      endpointUsed = cleanUrl;
-    }
-
-    // 3. If GET not supported or 404/405, probe /api/verify with test POST
-    if (!res || (res.status !== 200 && res.status !== 400)) {
-      const verifyUrl = cleanUrl.endsWith('/api/verify') ? cleanUrl : `${cleanUrl}/api/verify`;
+    // 1. Primary Test: Send test verification POST directly to /api/verify
+    try {
       res = await fetch(verifyUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ nin: '12345678901', merchantKey: key }),
         signal: controller.signal,
-      }).catch(() => null);
+      });
       endpointUsed = verifyUrl;
+    } catch {
+      res = null;
+    }
+
+    // 2. If POST returned 404 or 405, try root POST (e.g. Cloudflare Worker or single-route proxy)
+    if (!res || res.status === 404 || res.status === 405) {
+      try {
+        const rootRes = await fetch(baseUrl || cleanUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ nin: '12345678901', merchantKey: key }),
+          signal: controller.signal,
+        });
+        if (rootRes && (rootRes.ok || rootRes.status === 400)) {
+          res = rootRes;
+          endpointUsed = baseUrl || cleanUrl;
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    // 3. If POST failed or wasn't accepted, try GET /api/health or GET /api/verify
+    if (!res || (!res.ok && res.status !== 400)) {
+      try {
+        const getRes = await fetch(healthUrl, { method: 'GET', signal: controller.signal });
+        if (getRes && getRes.ok) {
+          res = getRes;
+          endpointUsed = healthUrl;
+        } else {
+          const verifyGet = await fetch(verifyUrl, { method: 'GET', signal: controller.signal });
+          if (verifyGet && verifyGet.ok) {
+            res = verifyGet;
+            endpointUsed = verifyUrl;
+          }
+        }
+      } catch {
+        // ignore
+      }
     }
 
     clearTimeout(timer);
@@ -1171,6 +1217,15 @@ export async function testProxyConnection(
       };
     }
 
+    if (res && res.status === 405) {
+      return {
+        ok: false,
+        latencyMs,
+        message: `Server reached (${latencyMs}ms) but returned HTTP 405 Method Not Allowed. The URL "${endpointUsed}" rejected POST requests. If this is a static hosting URL (like GitHub Pages or Cloudflare Pages), deploy the proxy to a real backend host like Render.com (free) or Vercel. If this is a custom server, ensure POST is accepted on /api/verify.`,
+        endpointTested: endpointUsed,
+      };
+    }
+
     return {
       ok: false,
       latencyMs,
@@ -1184,7 +1239,7 @@ export async function testProxyConnection(
     return {
       ok: false,
       latencyMs,
-      message: err?.name === 'AbortError' ? 'Proxy test timed out (9s). The server took too long to reply.' : `Connection failed: ${err?.message || String(err)}`,
+      message: err?.name === 'AbortError' ? 'Proxy test timed out (12s). The server took too long to reply.' : `Connection failed: ${err?.message || String(err)}`,
       endpointTested: cleanUrl,
     };
   }

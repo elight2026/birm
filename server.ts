@@ -5,6 +5,7 @@ import { fileURLToPath } from 'url';
 import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import { botService, verifySingleNin } from './src/services/botService';
+import { DEFAULT_GATEWAY_URL } from './src/types';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -42,6 +43,18 @@ app.get('/api/health', (_req: Request, res: Response) => {
     service: 'birs-server-proxy',
     time: new Date().toISOString(),
     cors: 'enabled (wildcard *)',
+  });
+});
+
+// GET probe handler for /api/verify and aliases (prevents 405 on health checks / GET tests)
+app.get(['/api/verify', '/api/proxy', '/api/validate', '/api/nin/validate'], (_req: Request, res: Response) => {
+  res.json({
+    status: 'ok',
+    service: 'BIRS NIN Server-Side Proxy Endpoint',
+    message: 'Endpoint is live and ready. Send POST with { nin } to verify.',
+    gateway: DEFAULT_GATEWAY_URL,
+    timestamp: new Date().toISOString(),
+    cors: 'enabled',
   });
 });
 

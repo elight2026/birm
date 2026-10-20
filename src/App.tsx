@@ -2412,6 +2412,23 @@ export default function App() {
                           Endpoint: {proxyTestResult.endpointTested}
                         </p>
                       )}
+                      {proxyTestResult.message.includes('405') && (
+                        <div className="mt-2 pt-2 border-t border-red-500/30 flex items-center justify-between gap-2 flex-wrap">
+                          <span className="text-[11px] text-red-200">
+                            Static hosts (like GitHub Pages) reject POST with HTTP 405.
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setShowProxyHub(true);
+                              setProxyTab('render');
+                            }}
+                            className="px-2.5 py-1 bg-purple-600 hover:bg-purple-500 text-white rounded font-semibold text-[11px] cursor-pointer shadow"
+                          >
+                            Deploy Free on Render.com →
+                          </button>
+                        </div>
+                      )}
                     </div>
                   )}
 
@@ -2925,6 +2942,20 @@ export default function App() {
                           <p className="text-[11px] font-mono text-slate-400 mt-1">
                             Endpoint tested: {proxyTestResult.endpointTested}
                           </p>
+                        )}
+                        {proxyTestResult.message.includes('405') && (
+                          <div className="mt-2.5 pt-2 border-t border-red-500/30 flex items-center justify-between gap-2 flex-wrap">
+                            <span className="text-[11px] text-red-200 font-medium">
+                              Tip: Static web hosts (like GitHub Pages) reject POST requests with HTTP 405.
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => setProxyTab('render')}
+                              className="px-3 py-1 bg-purple-600 hover:bg-purple-500 text-white rounded-lg font-semibold text-xs cursor-pointer shadow transition-all"
+                            >
+                              Deploy Free on Render.com (1-Click) →
+                            </button>
+                          </div>
                         )}
                       </div>
                     )}

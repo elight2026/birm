@@ -16,8 +16,22 @@ export default async function handler(req: any, res: any) {
     return res.status(200).end();
   }
 
+  // Health check probe (prevent HTTP 405 on GET / HEAD requests)
+  if (req.method === 'GET' || req.method === 'HEAD') {
+    return res.status(200).json({
+      status: 'ok',
+      service: 'BIRS NIN Gateway Vercel Proxy',
+      message: 'Proxy is live and ready. Send POST with { nin } to verify taxpayer records.',
+      gateway: DEFAULT_GATEWAY,
+      timestamp: new Date().toISOString(),
+    });
+  }
+
   if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
+    return res.status(405).json({
+      status: 'failed',
+      error: 'Method not allowed. Send POST with { nin } to verify.',
+    });
   }
 
   const { nin, merchantKey, gatewayUrl } = req.body || {};

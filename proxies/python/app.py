@@ -34,6 +34,16 @@ async def health():
         "message": "Live and accepting requests from your GitHub frontend"
     }
 
+@app.get("/api/verify")
+@app.get("/api/validate")
+@app.get("/api/proxy")
+async def verify_probe():
+    return {
+        "status": "ok",
+        "service": "BIRS Python Proxy",
+        "message": "Proxy is active. Send POST with { 'nin': '12345678901' } to verify."
+    }
+
 @app.post("/api/verify")
 @app.post("/api/validate")
 @app.post("/api/proxy")
