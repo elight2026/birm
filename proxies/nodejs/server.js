@@ -32,12 +32,15 @@ app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', service: 'BIRS Node.js Proxy', timestamp: new Date().toISOString() });
 });
 
-// GET probes for /api/verify to prevent HTTP 405
-app.get(['/api/verify', '/api/validate', '/api/proxy'], (_req, res) => {
+// GET probes or GET verification for /api/verify to prevent HTTP 405
+app.get(['/api/verify', '/api/validate', '/api/proxy'], (req, res) => {
+  if (req.query?.nin) {
+    return handleVerification(req, res);
+  }
   res.json({
     status: 'ok',
     service: 'BIRS Node.js Proxy',
-    message: 'Proxy is live and ready. Send POST with { "nin": "12345678901" } to verify.',
+    message: 'Proxy is live and ready. Send POST with { "nin": "12345678901" } or GET with ?nin= to verify.',
     gateway: DEFAULT_GATEWAY,
     timestamp: new Date().toISOString()
   });
@@ -45,7 +48,9 @@ app.get(['/api/verify', '/api/validate', '/api/proxy'], (_req, res) => {
 
 // Verification Proxy Handler
 async function handleVerification(req, res) {
-  const { nin, merchantKey, gatewayUrl } = req.body || {};
+  const nin = req.body?.nin || req.query?.nin;
+  const merchantKey = req.body?.merchantKey || req.query?.merchantKey;
+  const gatewayUrl = req.body?.gatewayUrl || req.query?.gatewayUrl;
   const cleanedNin = String(nin || '').replace(/\D/g, '');
 
   if (cleanedNin.length !== 11) {

@@ -231,28 +231,49 @@ export async function verifyNinInBrowser(
 
   // 2. REAL VERIFICATION VIA RELAY / BACKEND PROXY (Server-Side Proxy CORS Bypass)
   if (proxyUrl && proxyUrl.trim() !== '') {
-    try {
-      const pController = new AbortController();
-      const pTimer = setTimeout(() => pController.abort(), 25000);
-      let endpoint = proxyUrl.trim();
-      if (!endpoint.endsWith('/api/verify') && !endpoint.endsWith('/verify') && !endpoint.endsWith('/validate')) {
-        endpoint = `${endpoint.replace(/\/$/, '')}/api/verify`;
-      }
+    const rawProxy = proxyUrl.trim();
+    const isRunningOnGh = typeof window !== 'undefined' && window.location.hostname.includes('github.io');
+    const isRel = rawProxy.startsWith('/') || (!rawProxy.startsWith('http://') && !rawProxy.startsWith('https://'));
+    const isGh = rawProxy.includes('github.io') || rawProxy.includes('github.com');
 
-      const pRes = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          nin: cleanedNin,
-          merchantKey: merchantKey.trim(),
-          gatewayUrl: gatewayUrl || DEFAULT_GATEWAY_URL,
-          isDemo: false,
-        }),
-        signal: pController.signal,
-      });
-      clearTimeout(pTimer);
+    // Reject static GitHub Pages proxy attempts which cause 405 Method Not Allowed
+    if (isRunningOnGh && isRel) {
+      console.warn('Skipping relative proxy path on GitHub Pages as static hosts reject POST with HTTP 405.');
+    } else if (isGh) {
+      console.warn('Skipping github.io proxy URL as static hosts reject POST with HTTP 405.');
+    } else {
+      try {
+        const pController = new AbortController();
+        const pTimer = setTimeout(() => pController.abort(), 25000);
+        let endpoint = rawProxy;
+        if (!endpoint.endsWith('/api/verify') && !endpoint.endsWith('/verify') && !endpoint.endsWith('/validate')) {
+          endpoint = `${endpoint.replace(/\/$/, '')}/api/verify`;
+        }
 
-      const durationMs = Math.round(performance.now() - start);
+        const pRes = await fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            nin: cleanedNin,
+            merchantKey: merchantKey.trim(),
+            gatewayUrl: gatewayUrl || DEFAULT_GATEWAY_URL,
+            isDemo: false,
+          }),
+          signal: pController.signal,
+        });
+        clearTimeout(pTimer);
+
+        const durationMs = Math.round(performance.now() - start);
+
+        if (pRes.status === 405) {
+          return {
+            ok: false,
+            message: `Proxy returned HTTP 405 Method Not Allowed. The URL "${endpoint}" rejected the POST request. Static web servers (such as GitHub Pages) reject POST requests. Use a real backend host (Render.com free tier, Vercel) or the 1-Click Chrome Extension.`,
+            data: {},
+            durationMs,
+            source: 'Server Proxy (HTTP 405 Rejection)',
+          };
+        }
       const json = await pRes.json().catch(() => null);
 
       if (pRes.ok && json) {
@@ -301,6 +322,7 @@ export async function verifyNinInBrowser(
       console.warn('Configured proxy request error:', proxyErr);
     }
   }
+}
 
   // 3. REAL VERIFICATION VIA CHROME EXTENSION BRIDGE
   if (isExtensionBridgeAvailable()) {
@@ -1128,12 +1150,16 @@ export async function testProxyConnection(
     };
   }
 
-  // Detect static GitHub Pages entered by mistake
-  if (cleanUrl.includes('github.io')) {
+  // Detect static GitHub Pages or relative paths on GitHub Pages entered by mistake
+  const isRunningOnGitHubPages = typeof window !== 'undefined' && window.location.hostname.includes('github.io');
+  const isRelativeUrl = cleanUrl.startsWith('/') || (!cleanUrl.startsWith('http://') && !cleanUrl.startsWith('https://'));
+  const isGitHubHost = cleanUrl.includes('github.io') || cleanUrl.includes('github.com');
+
+  if (isGitHubHost || (isRunningOnGitHubPages && isRelativeUrl)) {
     return {
       ok: false,
       latencyMs: 0,
-      message: 'GitHub Pages (github.io) is a static hosting platform and cannot run a server-side proxy (it rejects POST with HTTP 405 Method Not Allowed). Please deploy the proxy on a backend platform like Render.com (free), Vercel, Railway, or your local Node.js server (http://localhost:3000).',
+      message: 'GitHub Pages (github.io) is a static file host and CANNOT run backend server code or accept POST requests (it rejects POST with HTTP 405 Method Not Allowed). Do not enter "/api/verify" or a github.io URL here. Instead, deploy your proxy on a real backend (Render.com free tier, Vercel Serverless, or local Node.js at http://localhost:3000), or use the 1-Click Chrome Extension to bypass CORS instantly without any server!',
       endpointTested: cleanUrl,
     };
   }

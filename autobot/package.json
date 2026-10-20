@@ -1,0 +1,11 @@
+{
+  "name": "birs-nin-autobot",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "node nin_autobot.mjs"
+  },
+  "dependencies": {
+    "xlsx": "^0.18.5"
+  }
+}

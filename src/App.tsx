@@ -117,6 +117,7 @@ export default function App() {
   const [isServerAvailable, setIsServerAvailable] = useState<boolean | null>(null);
   const [showDeployGuide, setShowDeployGuide] = useState(false);
   const [showProxyHub, setShowProxyHub] = useState(false);
+  const [showCorsModal, setShowCorsModal] = useState(false);
   const [proxyTesting, setProxyTesting] = useState(false);
   const [proxyTestResult, setProxyTestResult] = useState<{
     ok: boolean;
@@ -124,7 +125,7 @@ export default function App() {
     message: string;
     endpointTested?: string;
   } | null>(null);
-  const [proxyTab, setProxyTab] = useState<'connect' | 'render' | 'vercel' | 'python' | 'go' | 'node' | 'aws'>('connect');
+  const [proxyTab, setProxyTab] = useState<'connect' | 'extension' | 'render' | 'vercel' | 'python' | 'go' | 'node' | 'aws'>('connect');
 
   // Bot Batch State
   const [currentJob, setCurrentJob] = useState<BotJob | null>(null);
@@ -235,7 +236,15 @@ export default function App() {
       }
     };
     window.addEventListener('message', onExtMsg);
-    return () => window.removeEventListener('message', onExtMsg);
+    const pollInterval = setInterval(() => {
+      if (typeof window !== 'undefined' && (window as any).__BIRS_EXTENSION_AVAILABLE__) {
+        setIsExtensionConnected(true);
+      }
+    }, 1500);
+    return () => {
+      window.removeEventListener('message', onExtMsg);
+      clearInterval(pollInterval);
+    };
   }, []);
 
   // Real-time SSE connection with polling fallback (active only when server is available)
@@ -919,6 +928,18 @@ export default function App() {
               )}
             </button>
 
+            {/* CORS & HTTP 405 Fix Guide Button */}
+            <button
+              type="button"
+              onClick={() => setShowCorsModal(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-gradient-to-r from-red-950/70 to-purple-950/70 hover:from-red-900/80 hover:to-purple-900/80 text-red-300 border border-red-500/50 shadow transition-all cursor-pointer"
+              title="Fix Browser CORS blocking and HTTP 405 Method Not Allowed error"
+            >
+              <ShieldAlert className="w-3.5 h-3.5 text-red-400" />
+              <span>CORS &amp; 405 Fix</span>
+              <span className="text-[10px] bg-red-500/20 text-red-200 px-1 py-0.5 rounded border border-red-500/40 font-mono">Guide</span>
+            </button>
+
             {/* Direct Official BIRS Portal Link */}
             <a
               href={BIRS_DIRECT_PORTAL_URL}
@@ -995,6 +1016,15 @@ export default function App() {
             </span>
           </div>
           <div className="flex items-center gap-3 shrink-0">
+            <button
+              onClick={() => setShowCorsModal(true)}
+              className="text-red-300 hover:text-white underline font-semibold flex items-center gap-1 text-xs cursor-pointer"
+              title="Fix CORS and HTTP 405 Method Not Allowed errors"
+            >
+              <ShieldAlert className="w-3.5 h-3.5 text-red-400" />
+              <span>CORS &amp; 405 Fix Guide</span>
+            </button>
+            <span className="text-slate-600">|</span>
             <button
               onClick={() => setShowProxyHub(true)}
               className="text-purple-300 hover:text-white underline font-semibold flex items-center gap-1 text-xs cursor-pointer"
@@ -1388,6 +1418,74 @@ export default function App() {
                       </span>
                     </div>
                   </div>
+
+                  {/* Browser CORS & 405 Error Diagnostic Alert Card */}
+                  {(Boolean(currentJob?.results?.some(r => r.isCorsBlocked || r.message?.includes('CORS') || r.message?.includes('405'))) || 
+                    (typeof window !== 'undefined' && window.location.hostname.includes('github.io') && !proxyUrl && !isExtensionConnected && !isDemoMode)) && (
+                    <div className="p-4 bg-gradient-to-r from-red-950/70 via-slate-900 to-amber-950/70 border-2 border-red-500/50 rounded-xl space-y-3 shadow-xl">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex items-start gap-2.5">
+                          <ShieldAlert className="w-5 h-5 text-red-400 shrink-0 mt-0.5 animate-pulse" />
+                          <div>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <h4 className="text-xs font-bold text-red-300">
+                                Browser CORS Restriction on elight2026.github.io
+                              </h4>
+                              <span className="text-[10px] bg-red-500/20 text-red-300 border border-red-500/40 px-2 py-0.5 rounded-full font-semibold">
+                                Solution Ready
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-slate-300 mt-1 leading-relaxed">
+                              Modern web browsers block static websites (like GitHub Pages) from making direct cross-origin API calls to <code className="text-red-200 font-mono">service-gateway.bsg.com.ng</code>. Also, relative path <code className="text-amber-300 font-mono">/api/verify</code> causes <strong>HTTP 405 Method Not Allowed</strong> on GitHub Pages because static hosts have no backend server.
+                            </p>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setShowCorsModal(true)}
+                          className="px-3.5 py-1.5 bg-red-600 hover:bg-red-500 text-white rounded-lg text-xs font-bold cursor-pointer shrink-0 shadow transition-all"
+                        >
+                          View Fix Guide →
+                        </button>
+                      </div>
+
+                      {/* 3 Direct Fix Action Buttons */}
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1 text-xs">
+                        <button
+                          type="button"
+                          onClick={() => downloadExtensionZip()}
+                          className="flex items-center justify-center gap-1.5 p-2 bg-emerald-950/90 hover:bg-emerald-900 border border-emerald-500/50 text-emerald-300 rounded-lg font-semibold cursor-pointer shadow text-[11px] transition-all"
+                          title="Download Manifest V3 Chrome Extension to eliminate CORS completely with zero servers"
+                        >
+                          <Download className="w-3.5 h-3.5 text-emerald-400" />
+                          <span>1. Download Extension (.zip)</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setShowProxyHub(true)}
+                          className="flex items-center justify-center gap-1.5 p-2 bg-purple-950/90 hover:bg-purple-900 border border-purple-500/50 text-purple-300 rounded-lg font-semibold cursor-pointer shadow text-[11px] transition-all"
+                          title="Deploy free server-side proxy to Render.com or Vercel (bypasses browser CORS)"
+                        >
+                          <Server className="w-3.5 h-3.5 text-purple-400" />
+                          <span>2. Deploy Server Proxy</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsDemoMode(true);
+                            showToast('Switched to Sandbox Demo Mode. You can simulate all 242 NINs with realistic taxpayer data!', 'success');
+                          }}
+                          className="flex items-center justify-center gap-1.5 p-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 rounded-lg font-semibold cursor-pointer shadow text-[11px] transition-all"
+                          title="Switch to Sandbox Demo to simulate all verifications and export to Excel"
+                        >
+                          <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                          <span>3. Sandbox Demo Mode</span>
+                        </button>
+                      </div>
+                    </div>
+                  )}
 
                   {/* Live Bot Execution Log Terminal */}
                   <div className="border border-slate-800 bg-slate-950 rounded-xl p-3">
@@ -2776,6 +2874,18 @@ export default function App() {
               </button>
               <button
                 type="button"
+                onClick={() => setProxyTab('extension')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
+                  proxyTab === 'extension'
+                    ? 'bg-purple-600 text-white shadow'
+                    : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                }`}
+              >
+                <Puzzle className="w-3.5 h-3.5" />
+                <span>Chrome Extension (0-Server Fix)</span>
+              </button>
+              <button
+                type="button"
                 onClick={() => setProxyTab('render')}
                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
                   proxyTab === 'render'
@@ -2888,6 +2998,19 @@ export default function App() {
                       </button>
                     </div>
 
+                    {/* GitHub Pages static warning */}
+                    {typeof window !== 'undefined' && window.location.hostname.includes('github.io') && (
+                      <div className="p-3 bg-amber-950/40 border border-amber-500/30 rounded-xl space-y-1.5 text-xs text-amber-300">
+                        <div className="flex items-center gap-1.5 font-bold">
+                          <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
+                          <span>Important for GitHub Pages (elight2026.github.io):</span>
+                        </div>
+                        <p className="text-slate-300 text-[11px] leading-relaxed">
+                          Do NOT enter <code className="text-amber-200 font-mono">/api/verify</code> or a <code className="text-amber-200 font-mono">github.io</code> address here. GitHub Pages is a static host and will return <strong>HTTP 405 Method Not Allowed</strong>. Instead, deploy your free backend on Render.com or Vercel using the tabs above, run locally at <code className="text-purple-300 font-mono">http://localhost:3000</code>, or switch to the <strong>Chrome Extension (0-Server Fix)</strong> tab!
+                        </p>
+                      </div>
+                    )}
+
                     {/* Presets */}
                     <div className="flex items-center gap-2 text-[11px] text-slate-400 flex-wrap pt-1">
                       <span className="text-slate-500 font-medium">Quick presets:</span>
@@ -2974,6 +3097,47 @@ export default function App() {
                       <li>• <strong>Autonomous Bulk Bot:</strong> Every worker in the batch queue queries your proxy URL, rate-limited and throttled.</li>
                       <li>• <strong>Persistent Memory:</strong> Saved into your browser's <code className="text-purple-300 font-mono">localStorage</code> so you never have to re-enter it on refresh or return visits.</li>
                     </ul>
+                  </div>
+                </div>
+              )}
+
+              {/* TAB: Chrome Extension (0-Server Fix) */}
+              {proxyTab === 'extension' && (
+                <div className="space-y-4">
+                  <div className="bg-slate-950 border border-emerald-500/40 rounded-xl p-4 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2 text-emerald-400 font-bold">
+                        <Puzzle className="w-4 h-4" />
+                        <span>Chrome / Edge Extension (1-Click • Zero Server • Zero CORS)</span>
+                      </div>
+                      <span className="text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-full font-semibold">
+                        Instant Solution
+                      </span>
+                    </div>
+                    <p className="text-slate-300 leading-relaxed">
+                      Don't want to deploy a backend to Render or Vercel? This included Chrome Extension uses Manifest V3 native <code className="text-emerald-300 font-mono">host_permissions</code> to directly call the BIRS gateway from your browser with zero CORS blocks and zero servers!
+                    </p>
+                    <div className="pt-1">
+                      <button
+                        type="button"
+                        onClick={() => downloadExtensionZip()}
+                        className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold flex items-center gap-2 cursor-pointer shadow transition-all"
+                      >
+                        <Download className="w-4 h-4" />
+                        <span>Download Chrome Extension (.zip)</span>
+                      </button>
+                    </div>
+                    <div className="bg-slate-900 p-3.5 rounded-lg border border-slate-800 space-y-2 text-slate-300 text-xs">
+                      <p className="font-semibold text-slate-200">Quick 30-Second Setup in Chrome / Edge / Brave:</p>
+                      <ol className="list-decimal list-inside space-y-1.5 text-slate-400 pl-1">
+                        <li>Click the button above to download <strong className="text-slate-200">BIRS_NIN_Extension_v2.2.zip</strong>.</li>
+                        <li>Unzip the file into a folder on your computer.</li>
+                        <li>Open <code className="text-emerald-300 font-mono">chrome://extensions</code> in a new browser tab.</li>
+                        <li>Turn on <strong className="text-emerald-400">Developer mode</strong> (toggle switch in the top right).</li>
+                        <li>Click <strong className="text-slate-200">Load unpacked</strong> and select the unzipped folder.</li>
+                        <li>Return to this page: the extension bridge automatically activates and all 242 NINs will verify directly!</li>
+                      </ol>
+                    </div>
                   </div>
                 </div>
               )}
@@ -3331,6 +3495,187 @@ func main() {
                 className="px-5 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-xl text-xs font-semibold cursor-pointer shadow transition-all"
               >
                 Close Hub
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Dedicated CORS & HTTP 405 Method Not Allowed Solution Modal */}
+      {showCorsModal && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-red-500/40 rounded-2xl max-w-3xl w-full p-6 shadow-2xl flex flex-col max-h-[92vh] animate-in fade-in zoom-in-95 duration-150">
+            {/* Header */}
+            <div className="flex items-start justify-between pb-4 border-b border-slate-800 shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-red-500/20 text-red-400 rounded-xl border border-red-500/30">
+                  <ShieldAlert className="w-6 h-6" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-base font-bold text-white">Browser CORS &amp; HTTP 405 Fix Guide</h3>
+                    <span className="text-[10px] bg-red-500/20 text-red-300 border border-red-500/40 px-2 py-0.5 rounded-full font-semibold">
+                      Diagnostic &amp; Solutions
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Resolve "Browser CORS blocked direct gateway access" and "HTTP 405 Method Not Allowed" on elight2026.github.io.
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowCorsModal(false)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 cursor-pointer transition-all"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Scrollable Body */}
+            <div className="overflow-y-auto flex-1 py-4 space-y-4 text-xs pr-1">
+              {/* Problem Breakdown Card */}
+              <div className="bg-slate-950 border border-red-500/30 rounded-xl p-4 space-y-2.5 text-slate-300">
+                <div className="flex items-center gap-2 text-red-400 font-bold">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>Why Did These 2 Errors Occur?</span>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+                  <div className="bg-slate-900/90 p-3 rounded-lg border border-slate-800 space-y-1">
+                    <div className="text-red-300 font-bold text-xs flex items-center gap-1.5">
+                      <span>1. Browser CORS Blocked</span>
+                    </div>
+                    <p className="text-slate-400 text-[11px] leading-relaxed">
+                      When your web browser is on GitHub Pages (<code className="text-slate-300 font-mono">elight2026.github.io</code>), browser security prevents JavaScript from sending direct API requests to <code className="text-slate-300 font-mono">service-gateway.bsg.com.ng</code> because BIRS does not permit cross-origin requests from external websites.
+                    </p>
+                  </div>
+                  <div className="bg-slate-900/90 p-3 rounded-lg border border-slate-800 space-y-1">
+                    <div className="text-amber-300 font-bold text-xs flex items-center gap-1.5">
+                      <span>2. HTTP 405 on /api/verify</span>
+                    </div>
+                    <p className="text-slate-400 text-[11px] leading-relaxed">
+                      GitHub Pages is a static file host (like AWS S3). It does NOT run Node.js, Python, or Express servers. When a POST request is sent to <code className="text-slate-300 font-mono">/api/verify</code> on GitHub Pages, GitHub rejects it with <strong>HTTP 405 Method Not Allowed</strong>.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* SOLUTION 1: Chrome Extension */}
+              <div className="bg-slate-950 border-2 border-emerald-500/50 rounded-xl p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-emerald-400 font-bold">
+                    <Puzzle className="w-4 h-4" />
+                    <span>Solution 1: 1-Click Chrome Extension (Recommended • Zero Server)</span>
+                  </div>
+                  <span className="text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-full font-semibold">
+                    Fastest (30 seconds)
+                  </span>
+                </div>
+                <p className="text-slate-300 leading-relaxed">
+                  Browser extensions have elevated network privileges and can bypass CORS without any server. We have built an unpackable Manifest V3 extension inside this repository.
+                </p>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => downloadExtensionZip()}
+                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold flex items-center gap-2 cursor-pointer shadow transition-all"
+                  >
+                    <Download className="w-4 h-4" />
+                    <span>Download Chrome Extension (.zip)</span>
+                  </button>
+                </div>
+                <div className="bg-slate-900 p-3 rounded-lg border border-slate-800 text-[11px] space-y-1 text-slate-400">
+                  <div className="font-semibold text-slate-200">How to install in 30 seconds:</div>
+                  <ol className="list-decimal list-inside space-y-1 pl-1">
+                    <li>Unzip the downloaded <code className="text-slate-300 font-mono">BIRS_NIN_Extension_v2.2.zip</code>.</li>
+                    <li>Open <code className="text-emerald-400 font-mono">chrome://extensions</code> in Chrome or Edge and toggle on <strong className="text-slate-200">Developer mode</strong>.</li>
+                    <li>Click <strong className="text-slate-200">Load unpacked</strong> and select the unzipped folder.</li>
+                    <li>Return here: the extension bridges with this page, and all 242 NINs will verify directly with zero CORS errors!</li>
+                  </ol>
+                </div>
+              </div>
+
+              {/* SOLUTION 2: Free Server-Side Proxy */}
+              <div className="bg-slate-950 border border-purple-500/40 rounded-xl p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-purple-300 font-bold">
+                    <Server className="w-4 h-4" />
+                    <span>Solution 2: Deploy Free Server-Side Proxy (Render / Vercel)</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowCorsModal(false);
+                      setShowProxyHub(true);
+                    }}
+                    className="px-3 py-1 bg-purple-600 hover:bg-purple-500 text-white rounded-lg text-xs font-semibold cursor-pointer shadow"
+                  >
+                    Open Proxy Hub →
+                  </button>
+                </div>
+                <p className="text-slate-300 leading-relaxed">
+                  CORS is only enforced in web browsers — it does not exist between servers. Deploy the included <code className="text-purple-300 font-mono">proxies/nodejs/</code> to Render.com (100% free forever) or import this repo into Vercel. You will get a real URL like <code className="text-purple-300 font-mono">https://my-proxy.onrender.com</code> to enter into the Server Proxy Hub.
+                </p>
+              </div>
+
+              {/* SOLUTION 3: GitHub Actions Autobot */}
+              <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-cyan-300 font-bold">
+                    <Bot className="w-4 h-4" />
+                    <span>Solution 3: 100% Autonomous GitHub Actions Autobot</span>
+                  </div>
+                  <span className="text-[10px] bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 px-2 py-0.5 rounded-full font-semibold">
+                    Runs While You Sleep
+                  </span>
+                </div>
+                <p className="text-slate-300 leading-relaxed">
+                  Your repo includes <code className="text-cyan-300 font-mono">.github/workflows/nin-autobot.yml</code> and <code className="text-cyan-300 font-mono">autobot/nin_autobot.mjs</code>. This bot runs on GitHub's Linux cloud servers every 6 hours or on-demand without any browser or CORS at all. It verifies NINs, extracts names and details, and commits results to Excel automatically.
+                </p>
+              </div>
+
+              {/* SOLUTION 4: Sandbox Demo */}
+              <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-amber-300 font-bold">
+                    <Sparkles className="w-4 h-4" />
+                    <span>Solution 4: Sandbox Demo Simulation</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsDemoMode(true);
+                      setShowCorsModal(false);
+                      showToast('Switched to Sandbox Demo Mode. You can now verify all 242 NINs and export to Excel!', 'success');
+                    }}
+                    className="px-3 py-1 bg-amber-600 hover:bg-amber-500 text-white rounded-lg text-xs font-semibold cursor-pointer shadow"
+                  >
+                    Enable Sandbox Demo
+                  </button>
+                </div>
+                <p className="text-slate-400 text-[11px] leading-relaxed">
+                  Generates realistic Benue State taxpayer data with full names, phone numbers, and addresses. Ideal for previewing reports, testing batch exports to Excel (.xlsx), and validating workflows.
+                </p>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="pt-3 border-t border-slate-800 flex items-center justify-between shrink-0">
+              <a
+                href={BIRS_DIRECT_PORTAL_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-xs text-emerald-400 hover:text-emerald-300 font-semibold flex items-center gap-1.5"
+              >
+                <Building2 className="w-3.5 h-3.5" />
+                <span>Official BIRS Portal Direct (No CORS)</span>
+                <ExternalLink className="w-3 h-3" />
+              </a>
+              <button
+                type="button"
+                onClick={() => setShowCorsModal(false)}
+                className="px-5 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-xs font-semibold cursor-pointer transition-all"
+              >
+                Close Guide
               </button>
             </div>
           </div>

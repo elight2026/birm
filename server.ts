@@ -46,12 +46,23 @@ app.get('/api/health', (_req: Request, res: Response) => {
   });
 });
 
-// GET probe handler for /api/verify and aliases (prevents 405 on health checks / GET tests)
-app.get(['/api/verify', '/api/proxy', '/api/validate', '/api/nin/validate'], (_req: Request, res: Response) => {
+// GET probe handler or GET-based verification for /api/verify and aliases (prevents 405 on GET tests or GET clients)
+app.get(['/api/verify', '/api/proxy', '/api/validate', '/api/nin/validate'], async (req: Request, res: Response) => {
+  const queryNin = req.query.nin as string | undefined;
+  if (queryNin) {
+    const result = await verifySingleNin(String(queryNin), {
+      merchantKey: req.query.merchantKey as string | undefined,
+      gatewayUrl: req.query.gatewayUrl as string | undefined,
+      timeoutMs: req.query.timeoutMs ? Number(req.query.timeoutMs) : undefined,
+      isDemo: Boolean(req.query.isDemo),
+    });
+    res.json(result);
+    return;
+  }
   res.json({
     status: 'ok',
     service: 'BIRS NIN Server-Side Proxy Endpoint',
-    message: 'Endpoint is live and ready. Send POST with { nin } to verify.',
+    message: 'Endpoint is live and ready. Send POST with { nin } or GET with ?nin= to verify.',
     gateway: DEFAULT_GATEWAY_URL,
     timestamp: new Date().toISOString(),
     cors: 'enabled',
