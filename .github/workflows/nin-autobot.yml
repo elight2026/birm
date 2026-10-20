@@ -1,0 +1,34 @@
+name: NIN Autobot
+on:
+  schedule:
+    - cron: '0 */6 * * *'        # every 6 hours — runs even while you sleep
+  workflow_dispatch:             # also runnable manually from the Actions tab
+permissions:
+  contents: write
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Run autonomous bot
+        env:
+          MERCHANT_KEY: ${{ secrets.MERCHANT_KEY }}
+        run: |
+          cd autobot
+          npm install --no-audit --no-fund
+          node nin_autobot.mjs
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: nin-verification-results
+          path: autobot/results/
+      - name: Save progress back to repo
+        run: |
+          git config user.name "nin-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add autobot/results
+          git commit -m "chore: autobot results [skip ci]" || true
+          git push
