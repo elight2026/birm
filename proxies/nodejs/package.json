@@ -1,0 +1,14 @@
+{
+  "name": "birs-server-proxy-node",
+  "version": "1.0.0",
+  "description": "Standalone Node.js Server Proxy for BIRS NIN Gateway CORS Bypass",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.2"
+  }
+}

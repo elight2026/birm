@@ -15,19 +15,55 @@ const PORT = Number(process.env.PORT) || 3000;
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-// CORS & iFrame Friendly Headers
+// CORS & iFrame Friendly Headers for Browser Clients (GitHub Pages, localhost, Render)
 app.use((_req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-MERCHANT-KEY');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-MERCHANT-KEY, Authorization, Accept');
+  res.setHeader('Access-Control-Max-Age', '86400');
   next();
+});
+
+// Explicit OPTIONS preflight handler for browser CORS
+app.options('*', (_req: Request, res: Response) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-MERCHANT-KEY, Authorization, Accept');
+  res.status(200).end();
 });
 
 // ---------------------- API ROUTES ---------------------- //
 
-// 1. Instant Single NIN Verification
+// Health Check & Proxy Diagnostics
+app.get('/api/health', (_req: Request, res: Response) => {
+  res.json({
+    status: 'ok',
+    message: 'BIRS NIN Server-Side Proxy is online and active',
+    service: 'birs-server-proxy',
+    time: new Date().toISOString(),
+    cors: 'enabled (wildcard *)',
+  });
+});
+
+// 1. Instant Single NIN Verification (Server-Side Proxy Endpoint)
 app.post('/api/verify', async (req: Request, res: Response) => {
-  const { nin, merchantKey, gatewayUrl, timeoutMs, isDemo } = req.body;
+  const { nin, merchantKey, gatewayUrl, timeoutMs, isDemo } = req.body || {};
+  if (!nin) {
+    res.status(400).json({ error: 'NIN is required' });
+    return;
+  }
+  const result = await verifySingleNin(String(nin), {
+    merchantKey,
+    gatewayUrl,
+    timeoutMs,
+    isDemo: Boolean(isDemo),
+  });
+  res.json(result);
+});
+
+// Universal Proxy Aliases (/api/proxy, /api/validate, /api/nin/validate)
+app.post(['/api/proxy', '/api/validate', '/api/nin/validate'], async (req: Request, res: Response) => {
+  const { nin, merchantKey, gatewayUrl, timeoutMs, isDemo } = req.body || {};
   if (!nin) {
     res.status(400).json({ error: 'NIN is required' });
     return;

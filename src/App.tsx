@@ -44,6 +44,7 @@ import {
   History,
   ListFilter,
   UploadCloud,
+  Cloud,
   FileDown,
   Fingerprint,
   Building2,
@@ -92,7 +93,11 @@ import {
   verifyNinInBrowser,
   DEFAULT_GATEWAY_URL,
   DEFAULT_MERCHANT_KEY,
-  BIRS_DIRECT_PORTAL_URL
+  BIRS_DIRECT_PORTAL_URL,
+  testProxyConnection,
+  downloadNodeProxyScript,
+  downloadPythonProxyScript,
+  downloadGoProxyScript
 } from './services/clientBotEngine';
 
 export default function App() {
@@ -111,6 +116,15 @@ export default function App() {
   const [engineMode, setEngineMode] = useState<EngineMode>('server');
   const [isServerAvailable, setIsServerAvailable] = useState<boolean | null>(null);
   const [showDeployGuide, setShowDeployGuide] = useState(false);
+  const [showProxyHub, setShowProxyHub] = useState(false);
+  const [proxyTesting, setProxyTesting] = useState(false);
+  const [proxyTestResult, setProxyTestResult] = useState<{
+    ok: boolean;
+    latencyMs: number;
+    message: string;
+    endpointTested?: string;
+  } | null>(null);
+  const [proxyTab, setProxyTab] = useState<'connect' | 'render' | 'vercel' | 'python' | 'go' | 'node' | 'aws'>('connect');
 
   // Bot Batch State
   const [currentJob, setCurrentJob] = useState<BotJob | null>(null);
@@ -611,6 +625,37 @@ export default function App() {
     }
   };
 
+  // Test connection to Server-Side Proxy (Render, Vercel, Node, Python, Go)
+  const handleTestProxy = async (targetUrl?: string) => {
+    const url = (targetUrl !== undefined ? targetUrl : proxyUrl).trim();
+    if (!url) {
+      showToast('Please enter a proxy URL to test', 'error');
+      return;
+    }
+    setProxyTesting(true);
+    setProxyTestResult(null);
+    try {
+      const result = await testProxyConnection(url, merchantKey);
+      setProxyTestResult(result);
+      if (result.ok) {
+        setProxyUrl(url);
+        localStorage.setItem('birs_proxy_url', url);
+        showToast(`Proxy connected! Latency: ${result.latencyMs}ms`, 'success');
+      } else {
+        showToast(result.message, 'error');
+      }
+    } catch (err: any) {
+      setProxyTestResult({
+        ok: false,
+        latencyMs: 0,
+        message: err.message || 'Connection test failed',
+      });
+      showToast('Proxy connection test failed', 'error');
+    } finally {
+      setProxyTesting(false);
+    }
+  };
+
   // Single NIN check
   const handleVerifySingle = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -854,6 +899,26 @@ export default function App() {
               <span>GitHub Pages Fix</span>
             </button>
 
+            {/* Server-Side Proxy Hub Button */}
+            <button
+              type="button"
+              onClick={() => setShowProxyHub(true)}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border shadow transition-all cursor-pointer ${
+                proxyUrl
+                  ? 'bg-purple-950/60 hover:bg-purple-900/60 text-purple-300 border-purple-500/50'
+                  : 'bg-slate-800/80 hover:bg-slate-700/80 text-slate-300 border-slate-700/60'
+              }`}
+              title="Configure Server-Side Proxy (Render, Vercel, Python, Go, Node.js) to bypass browser CORS"
+            >
+              <Server className="w-3.5 h-3.5 text-purple-400" />
+              <span>Server Proxy</span>
+              {proxyUrl ? (
+                <span className="w-2 h-2 rounded-full bg-emerald-400 ml-0.5 animate-pulse" title="Proxy connected" />
+              ) : (
+                <span className="text-[10px] bg-slate-900/90 text-amber-300 px-1 py-0.2 rounded border border-amber-500/30">CORS</span>
+              )}
+            </button>
+
             {/* Direct Official BIRS Portal Link */}
             <a
               href={BIRS_DIRECT_PORTAL_URL}
@@ -922,7 +987,7 @@ export default function App() {
 
       {/* GitHub Pages / Static Hosting Top Notification */}
       {(!isServerAvailable || typeof window !== 'undefined' && window.location.hostname.includes('github.io')) && (
-        <div className="bg-gradient-to-r from-emerald-950/80 via-slate-900 to-blue-950/80 border-b border-emerald-500/30 px-4 py-2 text-xs flex items-center justify-between gap-3 text-slate-300">
+        <div className="bg-gradient-to-r from-emerald-950/80 via-slate-900 to-purple-950/80 border-b border-emerald-500/30 px-4 py-2 text-xs flex items-center justify-between gap-3 text-slate-300">
           <div className="flex items-center gap-2 max-w-4xl">
             <Globe className="w-4 h-4 text-emerald-400 shrink-0" />
             <span>
@@ -930,6 +995,15 @@ export default function App() {
             </span>
           </div>
           <div className="flex items-center gap-3 shrink-0">
+            <button
+              onClick={() => setShowProxyHub(true)}
+              className="text-purple-300 hover:text-white underline font-semibold flex items-center gap-1 text-xs cursor-pointer"
+              title="Configure Server-Side Proxy (Render/Vercel/Node/Python/Go) to bypass CORS"
+            >
+              <Server className="w-3.5 h-3.5 text-purple-400" />
+              <span>Server Proxy (CORS Fix)</span>
+            </button>
+            <span className="text-slate-600">|</span>
             <a
               href={BIRS_DIRECT_PORTAL_URL}
               target="_blank"
@@ -1877,13 +1951,13 @@ export default function App() {
 
                         <button
                           type="button"
-                          onClick={() => setActiveTab('settings')}
+                          onClick={() => setShowProxyHub(true)}
                           className="p-2.5 bg-purple-600/30 hover:bg-purple-600/50 border border-purple-500/40 text-purple-300 rounded-lg text-left text-xs transition-all flex flex-col justify-between cursor-pointer"
                         >
                           <span className="font-semibold flex items-center gap-1">
-                            <Server className="w-3.5 h-3.5" /> Set Relay Proxy
+                            <Server className="w-3.5 h-3.5" /> Server Proxy Hub
                           </span>
-                          <span className="text-[10px] text-purple-400/80 mt-1">Configure backend URL in Settings.</span>
+                          <span className="text-[10px] text-purple-400/80 mt-1">Render, Vercel, Node, Python, Go guides.</span>
                         </button>
                       </div>
 
@@ -1891,23 +1965,35 @@ export default function App() {
                       <div className="pt-2 border-t border-amber-500/20 flex items-center gap-2">
                         <input
                           type="text"
-                          placeholder="Relay Proxy URL (e.g. http://localhost:3000 or Vercel URL)..."
+                          placeholder="Server Proxy URL (e.g. https://my-proxy.onrender.com or http://localhost:3000)..."
                           value={proxyUrl}
                           onChange={(e) => {
                             setProxyUrl(e.target.value);
                             localStorage.setItem('birs_proxy_url', e.target.value);
                           }}
-                          className="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-[11px] font-mono text-slate-200 focus:outline-none focus:border-amber-400"
+                          className="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-[11px] font-mono text-slate-200 focus:outline-none focus:border-purple-400"
                         />
                         <button
                           type="button"
+                          disabled={proxyTesting}
+                          onClick={() => handleTestProxy()}
+                          className="px-3 py-1.5 bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white rounded-lg text-xs font-semibold whitespace-nowrap cursor-pointer shadow transition-all"
+                        >
+                          {proxyTesting ? 'Testing...' : 'Test & Save'}
+                        </button>
+                        <button
+                          type="button"
                           onClick={() => {
-                            showToast('Relay proxy URL saved! Retrying verification...', 'info');
+                            if (!proxyUrl) {
+                              showToast('Enter a proxy URL first', 'error');
+                              return;
+                            }
+                            showToast('Retrying verification via server proxy...', 'info');
                             handleVerifySingle(new Event('submit') as any);
                           }}
-                          className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded-lg text-xs font-semibold whitespace-nowrap cursor-pointer"
+                          className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold whitespace-nowrap cursor-pointer shadow transition-all"
                         >
-                          Save &amp; Retry
+                          Verify Now
                         </button>
                       </div>
                     </div>
@@ -2190,27 +2276,53 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Relay Proxy URL Configuration for GitHub Pages / CORS Bypass */}
-                <div className="pt-2 border-t border-slate-800">
-                  <div className="flex items-center justify-between mb-1.5">
-                    <label className="text-slate-300 font-medium flex items-center gap-1.5">
-                      <Globe className="w-3.5 h-3.5 text-purple-400" />
-                      <span>Relay Proxy / Backend URL (for GitHub Pages CORS Bypass):</span>
+                {/* Server-Side Proxy (CORS Bypass Engine) */}
+                <div className="pt-2 border-t border-slate-800 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <label className="text-slate-300 font-medium flex items-center gap-1.5 text-xs">
+                      <Server className="w-4 h-4 text-purple-400" />
+                      <span>Server-Side Proxy (CORS Bypass for GitHub Pages):</span>
                     </label>
-                    {proxyUrl && (
+                    <div className="flex items-center gap-2">
                       <button
                         type="button"
-                        onClick={() => {
-                          setProxyUrl('');
-                          localStorage.removeItem('birs_proxy_url');
-                          showToast('Cleared relay proxy. Using direct gateway.', 'info');
-                        }}
-                        className="text-[10px] text-red-400 hover:text-red-300 underline cursor-pointer"
+                        onClick={() => setShowProxyHub(true)}
+                        className="text-[11px] text-purple-400 hover:text-purple-300 underline font-semibold cursor-pointer flex items-center gap-1"
                       >
-                        Clear Proxy
+                        <span>Deploy Hub &amp; Code Guides →</span>
                       </button>
-                    )}
+                      {proxyUrl && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setProxyUrl('');
+                            setProxyTestResult(null);
+                            localStorage.removeItem('birs_proxy_url');
+                            showToast('Cleared proxy URL. Using direct browser engine.', 'info');
+                          }}
+                          className="text-[10px] text-red-400 hover:text-red-300 underline cursor-pointer"
+                        >
+                          Clear Proxy
+                        </button>
+                      )}
+                    </div>
                   </div>
+
+                  {/* Status Indicator */}
+                  {proxyUrl && (
+                    <div className="flex items-center justify-between bg-purple-950/40 border border-purple-500/30 px-3 py-2 rounded-xl text-xs">
+                      <div className="flex items-center gap-2 text-purple-200">
+                        <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                        <span>Active Proxy: <code className="text-purple-300 font-mono font-semibold">{proxyUrl}</code></span>
+                      </div>
+                      {proxyTestResult?.ok && (
+                        <span className="text-[10px] bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded-full font-semibold border border-emerald-500/30">
+                          Verified ({proxyTestResult.latencyMs}ms)
+                        </span>
+                      )}
+                    </div>
+                  )}
+
                   <div className="flex items-center gap-2">
                     <input
                       type="text"
@@ -2219,40 +2331,92 @@ export default function App() {
                         setProxyUrl(e.target.value);
                         localStorage.setItem('birs_proxy_url', e.target.value);
                       }}
-                      placeholder="e.g. http://localhost:3000 or https://your-project.vercel.app"
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 font-mono text-slate-200 focus:outline-none focus:border-purple-500"
+                      placeholder="e.g. https://my-birs-proxy.onrender.com or http://localhost:3000"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 font-mono text-slate-200 focus:outline-none focus:border-purple-500 text-xs"
                     />
                     <button
                       type="button"
-                      onClick={async () => {
-                        if (!proxyUrl) {
-                          showToast('Please enter a proxy URL first', 'error');
-                          return;
-                        }
-                        showToast('Testing proxy connection...', 'info');
-                        try {
-                          const testUrl = proxyUrl.endsWith('/api/verify') ? proxyUrl : `${proxyUrl.replace(/\/$/, '')}/api/verify`;
-                          const res = await fetch(testUrl, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ nin: '12345678901', merchantKey }),
-                          });
-                          if (res.ok || res.status === 400 || res.status === 404 || res.status === 500) {
-                            showToast('✓ Proxy connection successful! Real gateway reachable.', 'success');
-                          } else {
-                            showToast(`Proxy returned HTTP ${res.status}`, 'error');
-                          }
-                        } catch (err: any) {
-                          showToast(`Proxy unreachable: ${err?.message || 'Connection failed'}`, 'error');
-                        }
-                      }}
-                      className="px-3 py-2.5 bg-purple-600 hover:bg-purple-500 text-white rounded-xl text-xs font-semibold whitespace-nowrap cursor-pointer transition-all shadow"
+                      disabled={proxyTesting}
+                      onClick={() => handleTestProxy()}
+                      className="px-4 py-2.5 bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white rounded-xl text-xs font-semibold whitespace-nowrap cursor-pointer transition-all shadow"
                     >
-                      Test Connection
+                      {proxyTesting ? 'Testing...' : 'Test Connection'}
                     </button>
                   </div>
-                  <p className="text-[11px] text-slate-500 mt-1 leading-relaxed">
-                    When hosted on static GitHub Pages, enter any backend URL (e.g. <code>http://localhost:3000</code> or your free Vercel deployment) to forward verification requests server-to-server with zero browser CORS blocking.
+
+                  {/* Quick Presets */}
+                  <div className="flex items-center gap-2 text-[11px] text-slate-400 flex-wrap">
+                    <span className="text-slate-500">Quick presets:</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setProxyUrl('http://localhost:3000');
+                        localStorage.setItem('birs_proxy_url', 'http://localhost:3000');
+                        handleTestProxy('http://localhost:3000');
+                      }}
+                      className="px-2 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded border border-slate-700 cursor-pointer"
+                    >
+                      Localhost:3000
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowProxyHub(true);
+                        setProxyTab('render');
+                      }}
+                      className="px-2 py-0.5 bg-purple-950/60 hover:bg-purple-900/60 text-purple-300 rounded border border-purple-500/40 cursor-pointer"
+                    >
+                      Render.com (Free)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowProxyHub(true);
+                        setProxyTab('vercel');
+                      }}
+                      className="px-2 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded border border-slate-700 cursor-pointer"
+                    >
+                      Vercel Serverless
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowProxyHub(true);
+                        setProxyTab('python');
+                      }}
+                      className="px-2 py-0.5 bg-blue-950/60 hover:bg-blue-900/60 text-blue-300 rounded border border-blue-500/40 cursor-pointer"
+                    >
+                      Python FastAPI
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowProxyHub(true);
+                        setProxyTab('go');
+                      }}
+                      className="px-2 py-0.5 bg-cyan-950/60 hover:bg-cyan-900/60 text-cyan-300 rounded border border-cyan-500/40 cursor-pointer"
+                    >
+                      Go (Golang)
+                    </button>
+                  </div>
+
+                  {proxyTestResult && (
+                    <div className={`p-2.5 rounded-xl border text-xs ${
+                      proxyTestResult.ok
+                        ? 'bg-emerald-950/30 border-emerald-500/30 text-emerald-300'
+                        : 'bg-red-950/30 border-red-500/30 text-red-300'
+                    }`}>
+                      <p className="font-semibold">{proxyTestResult.message}</p>
+                      {proxyTestResult.endpointTested && (
+                        <p className="text-[10px] text-slate-400 mt-0.5 font-mono">
+                          Endpoint: {proxyTestResult.endpointTested}
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  <p className="text-[11px] text-slate-500 leading-relaxed">
+                    Browser CORS is enforced on static hosting (like GitHub Pages). When a Server Proxy URL is set, all requests from this frontend route through that backend to the BIRS gateway and return 100% genuine taxpayer records.
                   </p>
                 </div>
 
@@ -2535,6 +2699,613 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* Server-Side Proxy & CORS Bypass Hub Modal */}
+      {showProxyHub && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-purple-500/40 rounded-2xl max-w-4xl w-full p-6 shadow-2xl flex flex-col max-h-[92vh] animate-in fade-in zoom-in-95 duration-150">
+            {/* Modal Header */}
+            <div className="flex items-start justify-between pb-4 border-b border-slate-800 shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-purple-500/20 text-purple-400 rounded-xl border border-purple-500/30">
+                  <Server className="w-6 h-6" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-base font-bold text-white">Server-Side Proxy Hub</h3>
+                    <span className="text-[10px] bg-purple-500/20 text-purple-300 border border-purple-500/40 px-2 py-0.5 rounded-full font-semibold">
+                      Browser CORS Bypass
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Route API requests through a backend server (Render, Vercel, Node, Python, Go, or AWS) to fetch live BIRS taxpayer data without CORS blocking.
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowProxyHub(false)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 cursor-pointer transition-all"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Architecture Overview Banner */}
+            <div className="py-3 px-4 my-3 bg-gradient-to-r from-purple-950/60 via-slate-950 to-emerald-950/40 border border-purple-500/30 rounded-xl text-xs text-slate-300 flex items-center justify-between gap-4 shrink-0">
+              <div className="flex items-center gap-2">
+                <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span>
+                  <strong>Why a Server-Side Proxy works:</strong> CORS is strictly a browser security policy. When your server (Node, Python, Go, or Render) calls <code>service-gateway.bsg.com.ng</code>, CORS does not exist on the server level. The server forwards the real taxpayer JSON back to your GitHub frontend with <code>Access-Control-Allow-Origin: *</code>!
+                </span>
+              </div>
+              <span className="text-[11px] font-mono text-purple-300 bg-purple-900/40 px-2.5 py-1 rounded-lg border border-purple-500/30 whitespace-nowrap shrink-0">
+                100% Genuine Records
+              </span>
+            </div>
+
+            {/* Tabs Navigation */}
+            <div className="flex items-center gap-1.5 border-b border-slate-800 pb-2 text-xs font-semibold overflow-x-auto shrink-0">
+              <button
+                type="button"
+                onClick={() => setProxyTab('connect')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
+                  proxyTab === 'connect'
+                    ? 'bg-purple-600 text-white shadow'
+                    : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                }`}
+              >
+                <Zap className="w-3.5 h-3.5" />
+                <span>Connect &amp; Test</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setProxyTab('render')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
+                  proxyTab === 'render'
+                    ? 'bg-purple-600 text-white shadow'
+                    : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                }`}
+              >
+                <Globe className="w-3.5 h-3.5" />
+                <span>Render (Free 1-Click)</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setProxyTab('vercel')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
+                  proxyTab === 'vercel'
+                    ? 'bg-purple-600 text-white shadow'
+                    : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                }`}
+              >
+                <Layers className="w-3.5 h-3.5" />
+                <span>Vercel Serverless</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setProxyTab('node')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
+                  proxyTab === 'node'
+                    ? 'bg-purple-600 text-white shadow'
+                    : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                }`}
+              >
+                <Cpu className="w-3.5 h-3.5" />
+                <span>Node.js (Express)</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setProxyTab('python')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
+                  proxyTab === 'python'
+                    ? 'bg-purple-600 text-white shadow'
+                    : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                }`}
+              >
+                <FileCode className="w-3.5 h-3.5" />
+                <span>Python (FastAPI)</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setProxyTab('go')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
+                  proxyTab === 'go'
+                    ? 'bg-purple-600 text-white shadow'
+                    : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                }`}
+              >
+                <Terminal className="w-3.5 h-3.5" />
+                <span>Go (Golang)</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setProxyTab('aws')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
+                  proxyTab === 'aws'
+                    ? 'bg-purple-600 text-white shadow'
+                    : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                }`}
+              >
+                <Cloud className="w-3.5 h-3.5" />
+                <span>AWS Lambda</span>
+              </button>
+            </div>
+
+            {/* Tab Body */}
+            <div className="overflow-y-auto flex-1 py-4 space-y-4 text-xs pr-1">
+              {/* TAB 1: Connect & Test */}
+              {proxyTab === 'connect' && (
+                <div className="space-y-4">
+                  <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-slate-200 flex items-center gap-2">
+                        <Server className="w-4 h-4 text-purple-400" />
+                        <span>Active Proxy Server URL</span>
+                      </span>
+                      {proxyUrl && (
+                        <span className="text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-full font-semibold flex items-center gap-1">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                          <span>Connected</span>
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        value={proxyUrl}
+                        onChange={(e) => {
+                          setProxyUrl(e.target.value);
+                          localStorage.setItem('birs_proxy_url', e.target.value);
+                        }}
+                        placeholder="e.g. https://my-birs-proxy.onrender.com or http://localhost:3000"
+                        className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2.5 font-mono text-slate-200 text-xs focus:outline-none focus:border-purple-400"
+                      />
+                      <button
+                        type="button"
+                        disabled={proxyTesting}
+                        onClick={() => handleTestProxy()}
+                        className="px-4 py-2.5 bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white rounded-xl text-xs font-semibold whitespace-nowrap cursor-pointer shadow transition-all"
+                      >
+                        {proxyTesting ? 'Testing Ping...' : 'Test & Save'}
+                      </button>
+                    </div>
+
+                    {/* Presets */}
+                    <div className="flex items-center gap-2 text-[11px] text-slate-400 flex-wrap pt-1">
+                      <span className="text-slate-500 font-medium">Quick presets:</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const url = 'http://localhost:3000';
+                          setProxyUrl(url);
+                          localStorage.setItem('birs_proxy_url', url);
+                          handleTestProxy(url);
+                        }}
+                        className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg border border-slate-700 cursor-pointer"
+                      >
+                        Localhost (http://localhost:3000)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setProxyTab('render')}
+                        className="px-2.5 py-1 bg-purple-950/60 hover:bg-purple-900/60 text-purple-300 rounded-lg border border-purple-500/40 cursor-pointer"
+                      >
+                        Deploy to Render.com →
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setProxyTab('vercel')}
+                        className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg border border-slate-700 cursor-pointer"
+                      >
+                        Deploy to Vercel →
+                      </button>
+                    </div>
+
+                    {/* Diagnostic Test Result Box */}
+                    {proxyTestResult && (
+                      <div className={`mt-3 p-3.5 rounded-xl border ${
+                        proxyTestResult.ok
+                          ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-300'
+                          : 'bg-red-950/40 border-red-500/40 text-red-300'
+                      }`}>
+                        <div className="flex items-center justify-between font-bold">
+                          <span className="flex items-center gap-2">
+                            {proxyTestResult.ok ? (
+                              <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                            ) : (
+                              <XCircle className="w-4 h-4 text-red-400" />
+                            )}
+                            <span>{proxyTestResult.ok ? 'Connection Verified' : 'Connection Failed'}</span>
+                          </span>
+                          <span className="font-mono text-xs">{proxyTestResult.latencyMs}ms</span>
+                        </div>
+                        <p className="mt-1 text-slate-200 text-xs leading-relaxed">{proxyTestResult.message}</p>
+                        {proxyTestResult.endpointTested && (
+                          <p className="text-[11px] font-mono text-slate-400 mt-1">
+                            Endpoint tested: {proxyTestResult.endpointTested}
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-2 text-slate-300">
+                    <h4 className="font-bold text-slate-200 flex items-center gap-2">
+                      <Check className="w-4 h-4 text-emerald-400" />
+                      <span>How it integrates automatically:</span>
+                    </h4>
+                    <p className="text-slate-400 leading-relaxed">
+                      Once a Server Proxy URL is saved, the application automatically handles everything:
+                    </p>
+                    <ul className="space-y-1.5 pl-2 text-slate-300">
+                      <li>• <strong>Instant Single NIN Lookup:</strong> Directly routes through your proxy server without hitting browser CORS restrictions.</li>
+                      <li>• <strong>Autonomous Bulk Bot:</strong> Every worker in the batch queue queries your proxy URL, rate-limited and throttled.</li>
+                      <li>• <strong>Persistent Memory:</strong> Saved into your browser's <code className="text-purple-300 font-mono">localStorage</code> so you never have to re-enter it on refresh or return visits.</li>
+                    </ul>
+                  </div>
+                </div>
+              )}
+
+              {/* TAB 2: Render.com 1-Click */}
+              {proxyTab === 'render' && (
+                <div className="space-y-4">
+                  <div className="bg-slate-950 border border-purple-500/40 rounded-xl p-4 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2 text-purple-300 font-bold">
+                        <Globe className="w-4 h-4" />
+                        <span>Host on Render.com (100% Free Tier, No Credit Card)</span>
+                      </div>
+                      <span className="text-[10px] bg-purple-500/20 text-purple-300 border border-purple-500/30 px-2 py-0.5 rounded-full font-semibold">
+                        Recommended
+                      </span>
+                    </div>
+                    <p className="text-slate-300 leading-relaxed">
+                      Render lets you deploy a Node.js or Python backend server for free. It gives you a public HTTPS URL like <code className="text-purple-300 font-mono">https://birs-proxy.onrender.com</code> that passes requests to the BIRS gateway.
+                    </p>
+                    
+                    <div className="bg-slate-900 p-3.5 rounded-lg border border-slate-800 space-y-2 text-slate-300">
+                      <p className="font-semibold text-slate-200">Step-by-Step Setup (2 Minutes):</p>
+                      <ol className="list-decimal list-inside space-y-1.5 text-slate-400 pl-1">
+                        <li>Go to <a href="https://render.com" target="_blank" rel="noreferrer" className="text-purple-400 underline font-mono">render.com</a> and sign up for a free account.</li>
+                        <li>Click <strong className="text-slate-200">New +</strong> &gt; <strong className="text-purple-300">Web Service</strong>.</li>
+                        <li>Connect your GitHub repository (<code className="text-slate-300 font-mono">elight2026/birm</code>).</li>
+                        <li>In the settings, configure:
+                          <ul className="list-disc list-inside pl-4 mt-1 space-y-1 text-slate-300">
+                            <li><strong>Root Directory:</strong> <code className="text-emerald-400 font-mono">proxies/nodejs</code></li>
+                            <li><strong>Runtime:</strong> Node</li>
+                            <li><strong>Build Command:</strong> <code className="text-emerald-400 font-mono">npm install</code></li>
+                            <li><strong>Start Command:</strong> <code className="text-emerald-400 font-mono">node server.js</code></li>
+                            <li><strong>Instance Type:</strong> Free</li>
+                          </ul>
+                        </li>
+                        <li>Click <strong className="text-emerald-400">Deploy Web Service</strong>.</li>
+                        <li>Copy your Render URL (e.g. <code className="text-purple-300 font-mono">https://birs-proxy-abc.onrender.com</code>) and paste it into the <strong>Connect &amp; Test</strong> tab!</li>
+                      </ol>
+                    </div>
+
+                    <div className="flex items-center justify-between pt-1">
+                      <button
+                        type="button"
+                        onClick={() => downloadNodeProxyScript()}
+                        className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <FileDown className="w-3.5 h-3.5" />
+                        <span>Download Node.js Proxy Script</span>
+                      </button>
+                      <a
+                        href="https://render.com"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-4 py-1.5 bg-purple-600 hover:bg-purple-500 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 shadow"
+                      >
+                        <span>Open Render.com</span>
+                        <ExternalLink className="w-3.5 h-3.5" />
+                      </a>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* TAB 3: Vercel Serverless */}
+              {proxyTab === 'vercel' && (
+                <div className="space-y-4">
+                  <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2 text-slate-200 font-bold">
+                        <Layers className="w-4 h-4 text-blue-400" />
+                        <span>Vercel Serverless Function (Built-in)</span>
+                      </div>
+                      <span className="text-[10px] bg-blue-500/20 text-blue-300 border border-blue-500/30 px-2 py-0.5 rounded-full font-semibold">
+                        Zero Server Maintenance
+                      </span>
+                    </div>
+                    <p className="text-slate-300 leading-relaxed">
+                      This repository already contains <code className="text-blue-300 font-mono">api/verify.ts</code> and <code className="text-blue-300 font-mono">vercel.json</code>. When you import this repository into Vercel, it deploys an instant serverless API proxy on edge nodes.
+                    </p>
+
+                    <div className="bg-slate-900 p-3.5 rounded-lg border border-slate-800 space-y-2 text-slate-300">
+                      <p className="font-semibold text-slate-200">How to deploy on Vercel:</p>
+                      <ol className="list-decimal list-inside space-y-1.5 text-slate-400 pl-1">
+                        <li>Visit <a href="https://vercel.com" target="_blank" rel="noreferrer" className="text-blue-400 underline font-mono">vercel.com</a> and log in with GitHub.</li>
+                        <li>Click <strong className="text-slate-200">Add New...</strong> &gt; <strong className="text-blue-300">Project</strong>.</li>
+                        <li>Import your repo: <code className="text-slate-300 font-mono">elight2026/birm</code>.</li>
+                        <li>Click <strong className="text-emerald-400">Deploy</strong> (zero configuration needed).</li>
+                        <li>Your proxy will be live at: <code className="text-emerald-400 font-mono">https://your-project.vercel.app/api/verify</code>.</li>
+                        <li>Paste that domain into the <strong>Connect &amp; Test</strong> tab!</li>
+                      </ol>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* TAB 4: Node.js (Express) */}
+              {proxyTab === 'node' && (
+                <div className="space-y-4">
+                  <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2 text-emerald-400 font-bold">
+                        <Cpu className="w-4 h-4" />
+                        <span>Node.js Express Proxy (Standalone)</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => downloadNodeProxyScript()}
+                        className="px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 cursor-pointer shadow"
+                      >
+                        <FileDown className="w-3.5 h-3.5" />
+                        <span>Download server.js</span>
+                      </button>
+                    </div>
+                    <p className="text-slate-300">
+                      Runs locally or on any VPS / cloud host (AWS EC2, DigitalOcean, Railway, Replit).
+                    </p>
+                    <div className="bg-slate-900 rounded-lg p-3 border border-slate-800 font-mono text-[11px] text-slate-300 overflow-x-auto space-y-1">
+                      <div className="text-slate-500">// Run with 3 commands:</div>
+                      <div>npm init -y</div>
+                      <div>npm install express cors</div>
+                      <div>node server.js</div>
+                    </div>
+                    <div className="bg-slate-900 rounded-lg p-3 border border-slate-800 font-mono text-[11px] text-slate-400 max-h-56 overflow-y-auto">
+                      <pre className="text-slate-300 whitespace-pre leading-relaxed">{`import express from 'express';
+import cors from 'cors';
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+const DEFAULT_GATEWAY = 'https://service-gateway.bsg.com.ng/api/user-module/api/nin/validate';
+const DEFAULT_KEY = 'e6385c73adba4eb6807c0ec858fd8f5c';
+
+app.use(cors({ origin: '*', methods: ['GET', 'POST', 'OPTIONS'], allowedHeaders: ['Content-Type', 'X-MERCHANT-KEY'] }));
+app.use(express.json());
+
+app.post('/api/verify', async (req, res) => {
+  const { nin, merchantKey } = req.body || {};
+  const cleaned = String(nin || '').replace(/\\D/g, '');
+  if (cleaned.length !== 11) {
+    return res.status(400).json({ status: 'failed', message: 'NIN must be 11 digits' });
+  }
+
+  const gatewayRes = await fetch(DEFAULT_GATEWAY, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-MERCHANT-KEY': (merchantKey || DEFAULT_KEY).trim(),
+      'Origin': 'https://birs.be.gov.ng',
+      'Referer': 'https://birs.be.gov.ng/',
+      'User-Agent': 'Mozilla/5.0 BIRSProxy/1.0'
+    },
+    body: JSON.stringify({ nin: cleaned })
+  });
+
+  const data = await gatewayRes.json().catch(() => ({}));
+  res.status(gatewayRes.status).json({
+    status: gatewayRes.ok ? 'success' : 'failed',
+    ok: gatewayRes.ok,
+    message: data.message || (gatewayRes.ok ? 'Verified successfully' : 'Failed'),
+    details: data,
+    data
+  });
+});
+
+app.listen(PORT, '0.0.0.0', () => console.log('Proxy online on port ' + PORT));`}</pre>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* TAB 5: Python (FastAPI) */}
+              {proxyTab === 'python' && (
+                <div className="space-y-4">
+                  <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2 text-blue-400 font-bold">
+                        <FileCode className="w-4 h-4" />
+                        <span>Python FastAPI Proxy (Standalone)</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => downloadPythonProxyScript()}
+                        className="px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 cursor-pointer shadow"
+                      >
+                        <FileDown className="w-3.5 h-3.5" />
+                        <span>Download app.py</span>
+                      </button>
+                    </div>
+                    <div className="bg-slate-900 rounded-lg p-3 border border-slate-800 font-mono text-[11px] text-slate-300 space-y-1">
+                      <div className="text-slate-500"># Install &amp; launch:</div>
+                      <div>pip install fastapi uvicorn httpx</div>
+                      <div>python app.py</div>
+                    </div>
+                    <div className="bg-slate-900 rounded-lg p-3 border border-slate-800 font-mono text-[11px] text-slate-400 max-h-56 overflow-y-auto">
+                      <pre className="text-slate-300 whitespace-pre leading-relaxed">{`from fastapi import FastAPI, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
+import httpx, uvicorn, re, os
+
+app = FastAPI()
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+DEFAULT_GATEWAY = "https://service-gateway.bsg.com.ng/api/user-module/api/nin/validate"
+DEFAULT_KEY = "e6385c73adba4eb6807c0ec858fd8f5c"
+
+@app.post("/api/verify")
+async def verify(request: Request):
+    body = await request.json()
+    nin = re.sub(r"\\D", "", str(body.get("nin", "")))
+    if len(nin) != 11:
+        return Response(content='{"status":"failed","message":"NIN must be 11 digits"}', status_code=400)
+
+    headers = {
+        "Content-Type": "application/json",
+        "X-MERCHANT-KEY": str(body.get("merchantKey") or DEFAULT_KEY).strip(),
+        "Origin": "https://birs.be.gov.ng",
+        "Referer": "https://birs.be.gov.ng/"
+    }
+
+    async with httpx.AsyncClient(timeout=25.0) as client:
+        resp = await client.post(DEFAULT_GATEWAY, headers=headers, json={"nin": nin})
+        return Response(content=resp.text, status_code=resp.status_code, media_type="application/json")
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))`}</pre>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* TAB 6: Go (Golang) */}
+              {proxyTab === 'go' && (
+                <div className="space-y-4">
+                  <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2 text-cyan-400 font-bold">
+                        <Terminal className="w-4 h-4" />
+                        <span>Go (Golang) Single-Binary Proxy</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => downloadGoProxyScript()}
+                        className="px-3 py-1 bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 cursor-pointer shadow"
+                      >
+                        <FileDown className="w-3.5 h-3.5" />
+                        <span>Download main.go</span>
+                      </button>
+                    </div>
+                    <p className="text-slate-300">
+                      Zero external dependencies. Uses Go standard library <code className="text-cyan-300 font-mono">net/http</code>. High-throughput, low-memory footprint (~5MB RAM).
+                    </p>
+                    <div className="bg-slate-900 rounded-lg p-3 border border-slate-800 font-mono text-[11px] text-slate-300 space-y-1">
+                      <div className="text-slate-500">// Compile &amp; run:</div>
+                      <div>go run main.go</div>
+                    </div>
+                    <div className="bg-slate-900 rounded-lg p-3 border border-slate-800 font-mono text-[11px] text-slate-400 max-h-56 overflow-y-auto">
+                      <pre className="text-slate-300 whitespace-pre leading-relaxed">{`package main
+import (
+	"bytes", "encoding/json", "io", "log", "net/http", "os", "regexp", "time"
+)
+
+const gateway = "https://service-gateway.bsg.com.ng/api/user-module/api/nin/validate"
+const defaultKey = "e6385c73adba4eb6807c0ec858fd8f5c"
+
+func main() {
+	port := os.Getenv("PORT")
+	if port == "" { port = "8080" }
+
+	http.HandleFunc("/api/verify", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-MERCHANT-KEY")
+		if r.Method == http.MethodOptions { return }
+
+		var req struct { NIN string \`json:"nin"\` }
+		body, _ := io.ReadAll(r.Body)
+		json.Unmarshal(body, &req)
+
+		clean := regexp.MustCompile(\`\\D\`).ReplaceAllString(req.NIN, "")
+		if len(clean) != 11 {
+			w.WriteHeader(400); w.Write([]byte(\`{"status":"failed","message":"NIN must be 11 digits"}\`)); return
+		}
+
+		payload, _ := json.Marshal(map[string]string{"nin": clean})
+		bReq, _ := http.NewRequest("POST", gateway, bytes.NewBuffer(payload))
+		bReq.Header.Set("Content-Type", "application/json")
+		bReq.Header.Set("X-MERCHANT-KEY", defaultKey)
+		bReq.Header.Set("Origin", "https://birs.be.gov.ng")
+		bReq.Header.Set("Referer", "https://birs.be.gov.ng/")
+
+		client := &http.Client{Timeout: 25 * time.Second}
+		resp, err := client.Do(bReq)
+		if err != nil { w.WriteHeader(504); return }
+		defer resp.Body.Close()
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(resp.StatusCode)
+		io.Copy(w, resp.Body)
+	})
+
+	log.Println("Listening on :" + port)
+	http.ListenAndServe(":"+port, nil)
+}`}</pre>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* TAB 7: AWS Lambda */}
+              {proxyTab === 'aws' && (
+                <div className="space-y-4">
+                  <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2 text-amber-400 font-bold">
+                        <Cloud className="w-4 h-4" />
+                        <span>AWS Lambda Function URL (Serverless)</span>
+                      </div>
+                      <span className="text-[10px] bg-amber-500/20 text-amber-300 border border-amber-500/30 px-2 py-0.5 rounded-full font-semibold">
+                        Scales to Zero
+                      </span>
+                    </div>
+                    <p className="text-slate-300 leading-relaxed">
+                      AWS Lambda Function URLs provide a dedicated HTTPS endpoint with built-in CORS configuration and 1 million free invocations per month.
+                    </p>
+                    <div className="bg-slate-900 p-3.5 rounded-lg border border-slate-800 space-y-2 text-slate-300">
+                      <p className="font-semibold text-slate-200">How to set up:</p>
+                      <ol className="list-decimal list-inside space-y-1.5 text-slate-400 pl-1">
+                        <li>Open AWS Console &gt; <strong className="text-slate-200">Lambda</strong> &gt; <strong className="text-amber-400">Create function</strong>.</li>
+                        <li>Select <strong className="text-slate-200">Node.js 20.x</strong>.</li>
+                        <li>Under <strong className="text-slate-200">Advanced settings</strong>, check <strong className="text-amber-300">Enable function URL</strong> with Auth type: <strong className="text-emerald-400">NONE</strong>.</li>
+                        <li>Check <strong className="text-emerald-400">Configure cross-origin resource sharing (CORS)</strong> with Allow origin: <code className="text-emerald-300 font-mono">*</code>.</li>
+                        <li>Copy the code from <code className="text-slate-300 font-mono">proxies/aws-lambda/index.mjs</code> into the Lambda editor and click <strong className="text-emerald-400">Deploy</strong>.</li>
+                        <li>Paste your Lambda Function URL into the <strong>Connect &amp; Test</strong> tab!</li>
+                      </ol>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="pt-3 border-t border-slate-800 flex items-center justify-between gap-2 shrink-0">
+              <a
+                href={BIRS_DIRECT_PORTAL_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-xs text-emerald-400 hover:text-emerald-300 font-semibold flex items-center gap-1.5"
+              >
+                <Building2 className="w-3.5 h-3.5" />
+                <span>Or verify directly on official BIRS portal (No proxy needed)</span>
+                <ExternalLink className="w-3 h-3" />
+              </a>
+              <button
+                type="button"
+                onClick={() => setShowProxyHub(false)}
+                className="px-5 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-xl text-xs font-semibold cursor-pointer shadow transition-all"
+              >
+                Close Hub
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
+

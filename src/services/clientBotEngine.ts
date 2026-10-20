@@ -229,14 +229,15 @@ export async function verifyNinInBrowser(
     };
   }
 
-  // 2. REAL VERIFICATION VIA RELAY PROXY (If configured by user or server available)
+  // 2. REAL VERIFICATION VIA RELAY / BACKEND PROXY (Server-Side Proxy CORS Bypass)
   if (proxyUrl && proxyUrl.trim() !== '') {
     try {
       const pController = new AbortController();
       const pTimer = setTimeout(() => pController.abort(), 25000);
-      const endpoint = proxyUrl.endsWith('/api/verify')
-        ? proxyUrl
-        : `${proxyUrl.replace(/\/$/, '')}/api/verify`;
+      let endpoint = proxyUrl.trim();
+      if (!endpoint.endsWith('/api/verify') && !endpoint.endsWith('/verify') && !endpoint.endsWith('/validate')) {
+        endpoint = `${endpoint.replace(/\/$/, '')}/api/verify`;
+      }
 
       const pRes = await fetch(endpoint, {
         method: 'POST',
@@ -255,26 +256,49 @@ export async function verifyNinInBrowser(
       const json = await pRes.json().catch(() => null);
 
       if (pRes.ok && json) {
-        if (json.status === 'success') {
+        // Universal detection across Node.js, Python FastAPI, Go, Vercel, Cloudflare, and raw BIRS JSON:
+        const isSuccess =
+          json.status === 'success' ||
+          json.status === true ||
+          json.ok === true ||
+          json.code === 200 ||
+          Boolean(json.details && Object.keys(json.details).length > 0 && !json.details.error) ||
+          Boolean(json.data && (json.data.firstName || json.data['First Name'] || json.data.nin)) ||
+          Boolean(json.firstName || json.surname || json['First Name'] || json['Surname']);
+
+        if (isSuccess) {
+          const raw = json.details || json.data || json;
+          const flat = flattenJson(raw);
+          if (!flat['NIN']) flat['NIN'] = cleanedNin;
           return {
             ok: true,
             message: json.message || 'Verified successfully via Live BIRS Gateway',
-            data: json.details || {},
+            data: flat,
             durationMs,
-            source: 'BIRS Live Gateway (via Relay Proxy)',
+            source: 'BIRS Live Gateway (via Server Proxy)',
           };
         } else {
+          const errMsg = json.message || json.error || json.errorDescription || 'Verification failed on BIRS gateway';
           return {
             ok: false,
-            message: json.message || 'Verification failed on BIRS gateway',
-            data: json.details || {},
+            message: errMsg,
+            data: json.details || json.data || json || {},
             durationMs,
-            source: 'BIRS Live Gateway (via Relay Proxy)',
+            source: 'BIRS Live Gateway (via Server Proxy)',
           };
         }
+      } else if (json && (json.message || json.error)) {
+        return {
+          ok: false,
+          message: json.message || json.error,
+          data: json.details || {},
+          durationMs,
+          source: 'BIRS Live Gateway (via Server Proxy)',
+        };
       }
-    } catch {
-      // Fall through to extension or direct gateway
+    } catch (proxyErr: any) {
+      // If explicit proxy fails, fall through only if network error, but log
+      console.warn('Configured proxy request error:', proxyErr);
     }
   }
 
@@ -1078,4 +1102,340 @@ function downloadBlob(content: BlobPart, filename: string, mimeType: string) {
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+}
+
+/**
+ * Tests connection and measures latency to a Server-Side Proxy
+ * Compatible with Node.js, Python FastAPI, Go, Vercel, and Cloudflare proxies.
+ */
+export async function testProxyConnection(
+  url: string,
+  key: string = DEFAULT_MERCHANT_KEY
+): Promise<{
+  ok: boolean;
+  latencyMs: number;
+  message: string;
+  endpointTested: string;
+  details?: any;
+}> {
+  const cleanUrl = url.trim().replace(/\/$/, '');
+  if (!cleanUrl) {
+    return {
+      ok: false,
+      latencyMs: 0,
+      message: 'Proxy URL is empty. Please enter a valid URL (e.g. https://my-birs-proxy.onrender.com).',
+      endpointTested: '',
+    };
+  }
+
+  const start = performance.now();
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 9000);
+
+    // 1. Try health check endpoint
+    const healthUrl = cleanUrl.endsWith('/api/health') ? cleanUrl : `${cleanUrl}/api/health`;
+    let res = await fetch(healthUrl, { method: 'GET', signal: controller.signal }).catch(() => null);
+
+    let endpointUsed = healthUrl;
+
+    // 2. If health not found, try root /
+    if (!res || !res.ok) {
+      res = await fetch(cleanUrl, { method: 'GET', signal: controller.signal }).catch(() => null);
+      endpointUsed = cleanUrl;
+    }
+
+    // 3. If GET not supported or 404/405, probe /api/verify with test POST
+    if (!res || (res.status !== 200 && res.status !== 400)) {
+      const verifyUrl = cleanUrl.endsWith('/api/verify') ? cleanUrl : `${cleanUrl}/api/verify`;
+      res = await fetch(verifyUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nin: '12345678901', merchantKey: key }),
+        signal: controller.signal,
+      }).catch(() => null);
+      endpointUsed = verifyUrl;
+    }
+
+    clearTimeout(timer);
+    const latencyMs = Math.round(performance.now() - start);
+
+    if (res && (res.ok || res.status === 400 || res.status === 200)) {
+      const json = await res.json().catch(() => ({}));
+      return {
+        ok: true,
+        latencyMs,
+        message: `Proxy online! Connection verified in ${latencyMs}ms. CORS restrictions bypassed successfully.`,
+        endpointTested: endpointUsed,
+        details: json,
+      };
+    }
+
+    return {
+      ok: false,
+      latencyMs,
+      message: res
+        ? `Server reached (${latencyMs}ms) but returned HTTP ${res.status}. Verify endpoint configuration.`
+        : 'Could not connect to proxy server. Check that your backend (Render/Vercel/AWS) is active and CORS is enabled.',
+      endpointTested: endpointUsed,
+    };
+  } catch (err: any) {
+    const latencyMs = Math.round(performance.now() - start);
+    return {
+      ok: false,
+      latencyMs,
+      message: err?.name === 'AbortError' ? 'Proxy test timed out (9s). The server took too long to reply.' : `Connection failed: ${err?.message || String(err)}`,
+      endpointTested: cleanUrl,
+    };
+  }
+}
+
+// Client-Side Standalone Node.js Proxy Script Downloader
+export function downloadNodeProxyScript() {
+  const code = `/**
+ * Standalone Node.js Express Proxy for BIRS NIN Gateway
+ * Deploy on Render (Free), Railway, Replit, or run locally:
+ * 
+ * 1. npm init -y
+ * 2. npm install express cors
+ * 3. node server.js
+ */
+
+import express from 'express';
+import cors from 'cors';
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+const DEFAULT_GATEWAY = 'https://service-gateway.bsg.com.ng/api/user-module/api/nin/validate';
+const DEFAULT_KEY = 'e6385c73adba4eb6807c0ec858fd8f5c';
+
+app.use(cors({ origin: '*', methods: ['GET', 'POST', 'OPTIONS'], allowedHeaders: ['Content-Type', 'X-MERCHANT-KEY', 'Authorization'] }));
+app.use(express.json());
+
+app.get('/', (_req, res) => {
+  res.json({ status: 'ok', service: 'BIRS Node.js Proxy', message: 'Ready for GitHub Pages requests' });
+});
+
+app.get('/api/health', (_req, res) => {
+  res.json({ status: 'ok', time: new Date().toISOString() });
+});
+
+app.post(['/api/verify', '/api/validate', '/api/proxy'], async (req, res) => {
+  const { nin, merchantKey, gatewayUrl } = req.body || {};
+  const cleanedNin = String(nin || '').replace(/\\D/g, '');
+
+  if (cleanedNin.length !== 11) {
+    return res.status(400).json({ status: 'failed', message: 'NIN must be 11 digits', details: {} });
+  }
+
+  const targetUrl = gatewayUrl || DEFAULT_GATEWAY;
+  const key = (merchantKey || DEFAULT_KEY).trim();
+
+  try {
+    const birsRes = await fetch(targetUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-MERCHANT-KEY': key,
+        'Origin': 'https://birs.be.gov.ng',
+        'Referer': 'https://birs.be.gov.ng/',
+        'User-Agent': 'Mozilla/5.0 BIRSProxy/3.0',
+      },
+      body: JSON.stringify({ nin: cleanedNin }),
+    });
+
+    const data = await birsRes.json().catch(() => ({}));
+    if (birsRes.ok) {
+      return res.status(200).json({
+        status: 'success',
+        ok: true,
+        message: 'Verified successfully via Live BIRS Gateway',
+        details: data,
+        data: data,
+      });
+    }
+
+    return res.status(birsRes.status).json({
+      status: 'failed',
+      ok: false,
+      message: data.message || 'Verification failed on BIRS gateway',
+      details: data,
+    });
+  } catch (err) {
+    return res.status(500).json({ status: 'failed', message: err.message, details: {} });
+  }
+});
+
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(\`[BIRS Proxy] listening on http://0.0.0.0:\${PORT}\`);
+});
+`;
+  downloadBlob(code, 'birs_node_proxy.js', 'text/javascript');
+}
+
+// Client-Side Standalone Python Proxy Script Downloader
+export function downloadPythonProxyScript() {
+  const code = `"""
+BIRS NIN Gateway - Python FastAPI Server-Side Proxy
+Deploy on Render (Free), AWS, Railway, or run locally:
+pip install fastapi uvicorn httpx
+python app.py
+"""
+
+from fastapi import FastAPI, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
+import httpx
+import uvicorn
+import re
+import os
+
+app = FastAPI(title="BIRS NIN Proxy")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+DEFAULT_GATEWAY = "https://service-gateway.bsg.com.ng/api/user-module/api/nin/validate"
+DEFAULT_KEY = "e6385c73adba4eb6807c0ec858fd8f5c"
+
+@app.get("/")
+@app.get("/api/health")
+async def health():
+    return {"status": "ok", "service": "BIRS Python Proxy"}
+
+@app.post("/api/verify")
+@app.post("/api/validate")
+@app.post("/api/proxy")
+async def verify(request: Request):
+    body = await request.json()
+    nin = re.sub(r"\\D", "", str(body.get("nin", "")))
+    if len(nin) != 11:
+        return Response(content='{"status":"failed","message":"NIN must be 11 digits"}', status_code=400, media_type="application/json")
+    
+    key = str(body.get("merchantKey") or DEFAULT_KEY).strip()
+    url = str(body.get("gatewayUrl") or DEFAULT_GATEWAY)
+
+    headers = {
+        "Content-Type": "application/json",
+        "X-MERCHANT-KEY": key,
+        "Origin": "https://birs.be.gov.ng",
+        "Referer": "https://birs.be.gov.ng/",
+        "User-Agent": "Mozilla/5.0 BIRSProxy-Python/1.0"
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=25.0) as client:
+            resp = await client.post(url, headers=headers, json={"nin": nin})
+            data = resp.json() if resp.status_code == 200 else {}
+            if resp.status_code == 200:
+                return {"status": "success", "ok": True, "details": data, "data": data}
+            return Response(content=resp.text, status_code=resp.status_code, media_type="application/json")
+    except Exception as e:
+        return Response(content=f'{{"status":"failed","message":"{str(e)}"}}', status_code=500, media_type="application/json")
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
+`;
+  downloadBlob(code, 'birs_python_proxy.py', 'text/x-python');
+}
+
+// Client-Side Standalone Go Proxy Script Downloader
+export function downloadGoProxyScript() {
+  const code = `package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"os"
+	"regexp"
+	"time"
+)
+
+const (
+	defaultGateway = "https://service-gateway.bsg.com.ng/api/user-module/api/nin/validate"
+	defaultKey     = "e6385c73adba4eb6807c0ec858fd8f5c"
+)
+
+func enableCORS(w http.ResponseWriter) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-MERCHANT-KEY, Authorization")
+}
+
+func main() {
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		enableCORS(w)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(\`{"status":"ok","service":"BIRS Go Proxy"}\`))
+	})
+
+	http.HandleFunc("/api/verify", func(w http.ResponseWriter, r *http.Request) {
+		enableCORS(w)
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if r.Method != http.MethodPost {
+			http.Error(w, \`{"error":"Method not allowed"}\`, http.StatusMethodNotAllowed)
+			return
+		}
+
+		var reqData struct {
+			NIN         string \`json:"nin"\`
+			MerchantKey string \`json:"merchantKey"\`
+		}
+		bodyBytes, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(bodyBytes, &reqData)
+
+		cleaned := regexp.MustCompile(\`\\D\`).ReplaceAllString(reqData.NIN, "")
+		if len(cleaned) != 11 {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(\`{"status":"failed","message":"NIN must be 11 digits"}\`))
+			return
+		}
+
+		key := reqData.MerchantKey
+		if key == "" {
+			key = defaultKey
+		}
+
+		payload, _ := json.Marshal(map[string]string{"nin": cleaned})
+		client := &http.Client{Timeout: 25 * time.Second}
+		bReq, _ := http.NewRequest(http.MethodPost, defaultGateway, bytes.NewBuffer(payload))
+		bReq.Header.Set("Content-Type", "application/json")
+		bReq.Header.Set("X-MERCHANT-KEY", key)
+		bReq.Header.Set("Origin", "https://birs.be.gov.ng")
+		bReq.Header.Set("Referer", "https://birs.be.gov.ng/")
+
+		resp, err := client.Do(bReq)
+		if err != nil {
+			http.Error(w, fmt.Sprintf(\`{"status":"failed","message":"%s"}\`, err.Error()), http.StatusGatewayTimeout)
+			return
+		}
+		defer resp.Body.Close()
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(resp.StatusCode)
+		io.Copy(w, resp.Body)
+	})
+
+	log.Printf("[BIRS Go Proxy] listening on :%s", port)
+	http.ListenAndServe(":"+port, nil)
+}
+`;
+  downloadBlob(code, 'birs_go_proxy.go', 'text/x-go');
 }

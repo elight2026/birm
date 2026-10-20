@@ -1,8 +1,8 @@
 {
-  "buildTimestamp": "2026-10-20T12:37:32.711Z",
+  "buildTimestamp": "2026-10-20T14:12:28.345Z",
   "target": "dist & docs",
   "totalFiles": 24,
-  "totalSizeKb": 2276.7,
+  "totalSizeKb": 2398,
   "categories": {
     "html": 4,
     "js": 2,
@@ -36,12 +36,12 @@
       "sizeKb": 0.3
     },
     {
-      "path": "assets/index-C5jf8TMf.js",
-      "sizeKb": 1081.9
+      "path": "assets/index-5P4zldDJ.js",
+      "sizeKb": 1138.5
     },
     {
-      "path": "assets/index-DHhs4dge.css",
-      "sizeKb": 51
+      "path": "assets/index-BXH2bWIF.css",
+      "sizeKb": 55.1
     },
     {
       "path": "docs/.nojekyll",
@@ -64,12 +64,12 @@
       "sizeKb": 0.3
     },
     {
-      "path": "docs/assets/index-C5jf8TMf.js",
-      "sizeKb": 1081.9
+      "path": "docs/assets/index-5P4zldDJ.js",
+      "sizeKb": 1138.5
     },
     {
-      "path": "docs/assets/index-DHhs4dge.css",
-      "sizeKb": 51
+      "path": "docs/assets/index-BXH2bWIF.css",
+      "sizeKb": 55.1
     },
     {
       "path": "docs/favicon.ico",
