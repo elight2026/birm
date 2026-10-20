@@ -32,6 +32,9 @@ export interface VerificationResult {
   attempts: number;
   durationMs: number;
   isCorsFallback?: boolean;
+  isCorsBlocked?: boolean;
+  isDemoSimulation?: boolean;
+  source?: string;
 }
 
 export interface BotLog {
@@ -50,6 +53,7 @@ export interface BotJobSettings {
   timeoutMs: number;
   merchantKey: string;
   gatewayUrl: string;
+  proxyUrl?: string;
   autoRetry: boolean;
   isDemo: boolean;
 }
@@ -87,6 +91,9 @@ export interface SingleLookupResult {
   nin?: string;
   timestamp?: string;
   isCorsFallback?: boolean;
+  isCorsBlocked?: boolean;
+  isDemoSimulation?: boolean;
+  source?: string;
 }
 
 export type EngineMode = 'server' | 'browser';

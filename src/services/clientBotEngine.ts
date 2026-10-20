@@ -20,7 +20,7 @@ export {
   DEFAULT_MERCHANT_KEY
 };
 
-// Deterministic Nigerian taxpayer generator for sandbox/testing
+// Deterministic Nigerian taxpayer generator exclusively for explicit simulated Demo Mode
 export function generateMockTaxpayer(nin: string): Record<string, any> {
   const firstNames = ['Adebayo', 'Chioma', 'Musa', 'Amina', 'Chukwuemeka', 'Fatima', 'Babatunde', 'Ngozi', 'Ibrahim', 'Zainab', 'Oche', 'Dooshima'];
   const surnames = ['Okon', 'Danladi', 'Bello', 'Alabi', 'Eze', 'Abubakar', 'Audu', 'Agbo', 'Terkura', 'Orngu', 'Umar', 'Gbande'];
@@ -56,88 +56,307 @@ export function generateMockTaxpayer(nin: string): Record<string, any> {
     'Taxpayer ID (TIN)': `BIRS-TIN-${year}-${nin.slice(-4)}`,
     'Tracking ID': `TRK-${posHash.toString(36).toUpperCase()}`,
     'Residential Address': `No. ${(posHash % 120) + 1} High Level Road, ${lga}, Benue State`,
-    'Verification Source': 'BIRS Identity Gateway (Validated)',
+    'Verification Source': 'Simulated Demo Sandbox (Offline Simulation)',
   };
 }
 
-// Direct NIN verification helper (supports sandbox, live gateway, and intelligent CORS resilience)
+export function prettifyKey(k: string): string {
+  const specials: Record<string, string> = {
+    nin: 'NIN',
+    dob: 'Date of Birth',
+    dateofbirth: 'Date of Birth',
+    firstname: 'First Name',
+    surname: 'Surname',
+    middlename: 'Middle Name',
+    trackingid: 'Tracking ID',
+  };
+  const lower = String(k).toLowerCase().replace(/[^a-z]/g, '');
+  if (specials[lower]) return specials[lower];
+  return String(k)
+    .replace(/[_.]+/g, ' ')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+export function flattenJson(json: any, prefix = '', out: Record<string, any> = {}, depth = 0): Record<string, any> {
+  if (!json || typeof json !== 'object' || depth > 4) return out;
+  for (const k of Object.keys(json)) {
+    const v = json[k];
+    const key = prefix ? `${prefix} ${prettifyKey(k)}` : prettifyKey(k);
+    if (v === null || v === undefined) continue;
+    if (Array.isArray(v)) {
+      if (v.length && (typeof v[0] === 'string' || typeof v[0] === 'number')) {
+        out[key] = v.join(', ');
+      } else if (v.length && typeof v[0] === 'object') {
+        flattenJson(v[0], key, out, depth + 1);
+      }
+    } else if (typeof v === 'object') {
+      flattenJson(v, key, out, depth + 1);
+    } else {
+      const sv = String(v).trim();
+      if (sv !== '' && sv.length <= 500) {
+        out[key] = sv;
+      }
+    }
+    if (Object.keys(out).length > 80) break;
+  }
+  return out;
+}
+
+export function extractErrorMessage(json: any, httpStatus: number): string {
+  let msg = '';
+  if (json && typeof json === 'object') {
+    if (typeof json.message === 'string') msg = json.message;
+    else if (typeof json.error === 'string') msg = json.error;
+    else if (typeof json.errorDescription === 'string') msg = json.errorDescription;
+  }
+  const inner = msg.match(/"error"\s*:\s*"([^"]+)"/);
+  if (inner) msg = inner[1];
+  else {
+    const m2 = msg.match(/"(?:message|reason)"\s*:\s*"([^"]+)"/);
+    if (m2) msg = m2[1];
+  }
+  msg = (msg || '').trim();
+  if (!msg) msg = `Verification failed (HTTP ${httpStatus}).`;
+  if (msg.length > 250) msg = msg.slice(0, 250);
+  return msg;
+}
+
+// Check if Chrome extension bridge is available in window
+export function isExtensionBridgeAvailable(): boolean {
+  return typeof window !== 'undefined' && Boolean((window as any).__BIRS_EXTENSION_AVAILABLE__);
+}
+
+// Verify via Chrome extension content-script bridge
+export function verifyViaExtension(
+  nin: string,
+  merchantKey: string = DEFAULT_MERCHANT_KEY
+): Promise<{ ok: boolean; message: string; data?: Record<string, any>; durationMs: number; source?: string }> {
+  return new Promise((resolve) => {
+    const start = performance.now();
+    const id = `birs_ext_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    const timer = setTimeout(() => {
+      window.removeEventListener('message', listener);
+      resolve({
+        ok: false,
+        message: 'Extension bridge request timed out (20s).',
+        durationMs: Math.round(performance.now() - start),
+      });
+    }, 20000);
+
+    const listener = (event: MessageEvent) => {
+      if (event.data?.type === 'BIRS_PAGE_VERIFY_RESPONSE' && event.data?.id === id) {
+        clearTimeout(timer);
+        window.removeEventListener('message', listener);
+        const res = event.data.result || {};
+        resolve({
+          ok: Boolean(res.ok),
+          message: res.message || (res.ok ? 'Verified successfully via Extension' : 'Verification failed'),
+          data: res.data || {},
+          durationMs: Math.round(performance.now() - start),
+          source: 'BIRS Live Gateway (via Chrome Extension)',
+        });
+      }
+    };
+
+    window.addEventListener('message', listener);
+    window.postMessage({
+      type: 'BIRS_PAGE_VERIFY_REQUEST',
+      id,
+      nin,
+      merchantKey: merchantKey.trim(),
+    }, '*');
+  });
+}
+
+/**
+ * Direct NIN verification helper (Real Gateway or explicit Sandbox Demo Mode)
+ * Never returns mock data unless isDemo is explicitly true.
+ */
 export async function verifyNinInBrowser(
   nin: string,
   merchantKey: string = DEFAULT_MERCHANT_KEY,
   gatewayUrl: string = DEFAULT_GATEWAY_URL,
-  isDemo: boolean = true,
-  autoCorsFallback: boolean = true
-): Promise<{ ok: boolean; message: string; data?: Record<string, any>; durationMs: number; isCorsFallback?: boolean }> {
+  isDemo: boolean = false,
+  proxyUrl?: string
+): Promise<{
+  ok: boolean;
+  message: string;
+  data?: Record<string, any>;
+  durationMs: number;
+  isCorsBlocked?: boolean;
+  isDemoSimulation?: boolean;
+  source?: string;
+}> {
   const start = performance.now();
+  const cleanedNin = String(nin).replace(/\D/g, '');
 
-  if (isDemo) {
-    // Realistic slight delay (300-800ms)
-    await new Promise((r) => setTimeout(r, 350 + Math.random() * 450));
-    const durationMs = Math.round(performance.now() - start);
-
-    // Fail any NIN ending in '000' for demo failure testing
-    if (nin.endsWith('000')) {
-      return { ok: false, message: 'NIN not found in national identity database', durationMs };
-    }
-
-    const data = generateMockTaxpayer(nin);
-    return { ok: true, message: 'Taxpayer verified successfully', data, durationMs, isCorsFallback: false };
+  if (cleanedNin.length !== 11) {
+    return {
+      ok: false,
+      message: 'Invalid NIN format: Nigerian National Identification Number must be exactly 11 digits.',
+      durationMs: 0,
+    };
   }
 
-  // Live Gateway Verification
+  // 1. Explicit Sandbox Demo Mode ONLY (user opted-in simulation)
+  if (isDemo) {
+    await new Promise((r) => setTimeout(r, 200 + Math.random() * 250));
+    const durationMs = Math.round(performance.now() - start);
+
+    if (cleanedNin.endsWith('000')) {
+      return {
+        ok: false,
+        message: 'NIN not found in simulated database',
+        durationMs,
+        isDemoSimulation: true,
+        source: 'Simulated Demo Sandbox',
+      };
+    }
+
+    const data = generateMockTaxpayer(cleanedNin);
+    return {
+      ok: true,
+      message: 'Verified (Simulated Demo Sandbox)',
+      data,
+      durationMs,
+      isDemoSimulation: true,
+      source: 'Simulated Demo Sandbox',
+    };
+  }
+
+  // 2. REAL VERIFICATION VIA RELAY PROXY (If configured by user or server available)
+  if (proxyUrl && proxyUrl.trim() !== '') {
+    try {
+      const pController = new AbortController();
+      const pTimer = setTimeout(() => pController.abort(), 25000);
+      const endpoint = proxyUrl.endsWith('/api/verify')
+        ? proxyUrl
+        : `${proxyUrl.replace(/\/$/, '')}/api/verify`;
+
+      const pRes = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          nin: cleanedNin,
+          merchantKey: merchantKey.trim(),
+          gatewayUrl: gatewayUrl || DEFAULT_GATEWAY_URL,
+          isDemo: false,
+        }),
+        signal: pController.signal,
+      });
+      clearTimeout(pTimer);
+
+      const durationMs = Math.round(performance.now() - start);
+      const json = await pRes.json().catch(() => null);
+
+      if (pRes.ok && json) {
+        if (json.status === 'success') {
+          return {
+            ok: true,
+            message: json.message || 'Verified successfully via Live BIRS Gateway',
+            data: json.details || {},
+            durationMs,
+            source: 'BIRS Live Gateway (via Relay Proxy)',
+          };
+        } else {
+          return {
+            ok: false,
+            message: json.message || 'Verification failed on BIRS gateway',
+            data: json.details || {},
+            durationMs,
+            source: 'BIRS Live Gateway (via Relay Proxy)',
+          };
+        }
+      }
+    } catch {
+      // Fall through to extension or direct gateway
+    }
+  }
+
+  // 3. REAL VERIFICATION VIA CHROME EXTENSION BRIDGE
+  if (isExtensionBridgeAvailable()) {
+    try {
+      const extRes = await verifyViaExtension(cleanedNin, merchantKey);
+      if (extRes.ok || extRes.message) {
+        return extRes;
+      }
+    } catch {
+      // Fall through to direct fetch
+    }
+  }
+
+  // 4. REAL LIVE BIRS GATEWAY CALL (Direct to service-gateway.bsg.com.ng)
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 25000);
 
-    const res = await fetch(gatewayUrl, {
+    const res = await fetch(gatewayUrl || DEFAULT_GATEWAY_URL, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'X-MERCHANT-KEY': merchantKey.trim(),
       },
-      body: JSON.stringify({ nin: nin.trim() }),
+      body: JSON.stringify({ nin: cleanedNin }),
       signal: controller.signal,
     });
     clearTimeout(timer);
 
     const durationMs = Math.round(performance.now() - start);
-    if (res.ok) {
-      const json = await res.json();
-      return { ok: true, message: 'Verified via Live BIRS Gateway', data: json, durationMs, isCorsFallback: false };
+    let json: any = null;
+    const text = await res.text();
+    if (text) {
+      try {
+        json = JSON.parse(text);
+      } catch {
+        // body not json
+      }
     }
 
-    let errorMsg = `Gateway returned HTTP ${res.status}`;
-    try {
-      const errJson = await res.json();
-      errorMsg = errJson.message || errJson.error || errorMsg;
-    } catch {
-      // fallback
-    }
-    return { ok: false, message: errorMsg, durationMs, isCorsFallback: false };
-  } catch (err: any) {
-    const durationMs = Math.round(performance.now() - start);
-    let msg = err.message || 'Network request failed';
-    const isCors = msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('CORS') || err.name === 'TypeError';
-
-    // Intelligent CORS Fallback for static browser environments (like GitHub Pages)
-    if (isCors && autoCorsFallback) {
-      const taxpayer = generateMockTaxpayer(nin);
-      taxpayer['Verification Source'] = 'BIRS Identity Gateway (Sandbox Fallback - Live Gateway CORS Restricted)';
+    if (res.ok && json) {
+      const details = flattenJson(json);
+      if (!details['NIN']) details['NIN'] = cleanedNin;
       return {
         ok: true,
-        message: 'Taxpayer verified via Sandbox Fallback (Remote gateway CORS restricted direct browser access)',
-        data: taxpayer,
+        message: 'Verified successfully via Live BIRS Gateway',
+        data: details,
         durationMs,
-        isCorsFallback: true,
+        source: 'BIRS Live Gateway (Direct)',
       };
     }
 
-    if (err.name === 'AbortError') {
-      msg = 'Gateway Timeout (25s exceeded)';
+    const errorMsg = extractErrorMessage(json, res.status);
+    return {
+      ok: false,
+      message: errorMsg,
+      data: json || {},
+      durationMs,
+      source: 'BIRS Live Gateway (Direct)',
+    };
+  } catch (err: any) {
+    const durationMs = Math.round(performance.now() - start);
+    let msg = err?.message || 'Network request failed';
+    const isCors =
+      msg.includes('Failed to fetch') ||
+      msg.includes('NetworkError') ||
+      msg.includes('CORS') ||
+      err?.name === 'TypeError';
+
+    if (err?.name === 'AbortError') {
+      msg = 'Gateway Timeout: BIRS portal took longer than 25s to respond.';
     } else if (isCors) {
-      msg = 'Browser CORS blocked direct gateway access. (Tip: Use Sandbox mode, run Node/Python script, or use Chrome Extension).';
+      msg = 'Browser CORS blocked direct gateway access: service-gateway.bsg.com.ng does not allow direct cross-origin browser requests from static origins like github.io.';
     }
-    return { ok: false, message: msg, durationMs, isCorsFallback: false };
+
+    return {
+      ok: false,
+      message: msg,
+      durationMs,
+      isCorsBlocked: isCors,
+      source: 'Live Gateway (Direct)',
+    };
   }
 }
 
@@ -171,7 +390,11 @@ export class ClientBotManager {
 
     job.status = 'running';
     job.startedAt = new Date().toISOString();
-    this.addLog(job, 'info', `🚀 Bot started for ${job.totalNins} NINs [${job.settings.isDemo ? 'Sandbox Engine' : 'Live Gateway'}]`);
+    this.addLog(
+      job,
+      'info',
+      `🚀 Bot started for ${job.totalNins} NINs [${job.settings.isDemo ? 'Sandbox Engine' : 'Live Gateway Real Verification'}]`
+    );
     this.onUpdate({ ...job });
 
     const queue = [...job.queue];
@@ -198,7 +421,8 @@ export class ClientBotManager {
       let lastMessage = '';
       let taxpayerData: any = null;
       let totalDuration = 0;
-      let wasCorsFallback = false;
+      let isCorsBlocked = false;
+      let verificationSource = '';
 
       while (attempts <= (job.settings.autoRetry ? job.settings.maxRetries : 0) && !success && !state.stopped) {
         attempts++;
@@ -214,26 +438,26 @@ export class ClientBotManager {
           job.settings.merchantKey,
           job.settings.gatewayUrl,
           job.settings.isDemo,
-          true
+          job.settings.proxyUrl
         );
 
         totalDuration += res.durationMs;
         lastMessage = res.message;
+        isCorsBlocked = Boolean(res.isCorsBlocked);
+        verificationSource = res.source || '';
+
         if (res.ok) {
           success = true;
           taxpayerData = res.data;
-          if (res.isCorsFallback) {
-            wasCorsFallback = true;
-          }
         } else {
-          // If non-recoverable error, do not retry
-          if (res.message.includes('not found') || res.message.includes('Invalid NIN')) {
+          // If non-recoverable error (e.g. not found or CORS), do not loop retry
+          if (res.message.includes('not found') || res.message.includes('Invalid NIN') || res.isCorsBlocked) {
             break;
           }
         }
       }
 
-      // Record result
+      // Record result (strictly genuine, never faked)
       const verifiedResult: VerificationResult = {
         nin,
         status: success ? 'success' : 'failed',
@@ -242,7 +466,9 @@ export class ClientBotManager {
         verifiedAt: new Date().toISOString(),
         attempts,
         durationMs: totalDuration,
-        isCorsFallback: wasCorsFallback,
+        isCorsBlocked,
+        isDemoSimulation: job.settings.isDemo,
+        source: verificationSource,
       };
 
       job.results.unshift(verifiedResult);
@@ -251,8 +477,7 @@ export class ClientBotManager {
       if (success) {
         job.stats.success++;
         const name = taxpayerData ? `${taxpayerData['First Name'] || ''} ${taxpayerData['Surname'] || ''}`.trim() : '';
-        const tag = wasCorsFallback ? ' [Sandbox: CORS Fallback]' : '';
-        this.addLog(job, 'success', `Verified ${nin} ${name ? `(${name})` : ''}${tag}`, nin);
+        this.addLog(job, 'success', `Verified ${nin} ${name ? `(${name})` : ''}`, nin);
       } else {
         job.stats.failed++;
         this.addLog(job, 'error', `Failed ${nin}: ${lastMessage}`, nin);
@@ -265,53 +490,45 @@ export class ClientBotManager {
 
       this.onUpdate({ ...job });
 
-      // Apply delay & jitter
-      if (queue.length > 0 && !state.stopped) {
-        const jitter = (Math.random() * 2 - 1) * job.settings.jitterMs;
-        const sleepTime = Math.max(200, job.settings.delayMs + jitter);
-        await new Promise((r) => setTimeout(r, sleepTime));
+      // Apply delay & jitter before next NIN
+      const delay = Math.max(0, job.settings.delayMs || 0);
+      const jitter = Math.floor(Math.random() * (job.settings.jitterMs || 0));
+      if (delay + jitter > 0 && queue.length > 0) {
+        await new Promise((r) => setTimeout(r, delay + jitter));
       }
     };
 
-    // Run concurrency pool
-    const workerPromises = Array.from({ length: concurrency }, async () => {
+    const worker = async () => {
       activeWorkers++;
       while (queue.length > 0 && !state.stopped) {
         await processNext();
       }
       activeWorkers--;
-    });
+      if (activeWorkers === 0) {
+        job.status = state.stopped ? 'stopped' : 'completed';
+        job.completedAt = new Date().toISOString();
+        this.addLog(job, 'info', `🏁 Bot job completed. Total verified: ${job.stats.success}/${job.stats.total}`);
+        this.onUpdate({ ...job });
+      }
+    };
 
-    await Promise.all(workerPromises);
-
-    if (state.stopped) {
-      job.status = 'stopped';
-      this.addLog(job, 'warn', '🛑 Bot was manually stopped.');
-    } else {
-      job.status = 'completed';
-      job.completedAt = new Date().toISOString();
-      this.addLog(
-        job,
-        'info',
-        `🏁 Completed batch: ${job.stats.success} verified, ${job.stats.failed} failed out of ${job.totalNins}.`
-      );
+    const workerPromises = [];
+    for (let i = 0; i < concurrency; i++) {
+      workerPromises.push(worker());
     }
-
-    this.onUpdate({ ...job });
-    this.activeJobs.delete(job.id);
   }
 
   private addLog(job: BotJob, level: BotLog['level'], message: string, nin?: string) {
-    job.logs.push({
-      id: Math.random().toString(36).slice(2, 9),
+    const log: BotLog = {
+      id: `log_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
       timestamp: new Date().toISOString(),
       level,
       message,
       nin,
-    });
-    // Keep max 250 logs
-    if (job.logs.length > 250) {
-      job.logs.shift();
+    };
+    job.logs.unshift(log);
+    if (job.logs.length > 500) {
+      job.logs = job.logs.slice(0, 500);
     }
   }
 }
@@ -322,139 +539,137 @@ export function exportResultsInBrowser(
   format: 'xlsx' | 'csv' = 'xlsx',
   filter: 'all' | 'success' = 'all'
 ) {
-  const filtered = filter === 'success' ? job.results.filter((r: VerificationResult) => r.status === 'success') : job.results;
+  const filtered = filter === 'success'
+    ? job.results.filter((r) => r.status === 'success')
+    : job.results;
 
-  const rows = filtered.map((r: VerificationResult) => {
-    const details = r.details || {};
-    return {
+  if (filtered.length === 0) {
+    throw new Error('No records match the selected export filter.');
+  }
+
+  const rows = filtered.map((r) => {
+    const base: Record<string, any> = {
       'NIN': r.nin,
       'Status': r.status.toUpperCase(),
-      'Verification Message': r.message,
-      'Verified At': r.verifiedAt,
+      'Message': r.message,
+      'Verification Date': r.verifiedAt,
+      'Response Time (ms)': r.durationMs,
       'Attempts': r.attempts,
-      'Duration (ms)': r.durationMs,
-      'First Name': details['First Name'] || details.firstName || '',
-      'Surname': details['Surname'] || details.surname || '',
-      'Middle Name': details['Middle Name'] || details.middleName || '',
-      'Date of Birth': details['Date of Birth'] || details.dob || '',
-      'Gender': details['Gender'] || details.gender || '',
-      'Mobile Phone': details['Mobile'] || details.mobile || '',
-      'State of Origin': details['State of Origin'] || details.state || '',
-      'LGA of Origin': details['LGA of Origin'] || details.lga || '',
-      'Taxpayer ID (TIN)': details['Taxpayer ID (TIN)'] || details.tin || '',
-      'Tracking ID': details['Tracking ID'] || details.trackingId || '',
-      'Residential Address': details['Residential Address'] || details.address || '',
     };
+
+    if (r.details && typeof r.details === 'object') {
+      for (const [k, v] of Object.entries(r.details)) {
+        if (k !== 'NIN' && typeof v !== 'object') {
+          base[k] = v;
+        }
+      }
+    }
+    return base;
   });
 
   const wb = XLSX.utils.book_new();
-  const ws = XLSX.utils.json_to_sheet(rows.length ? rows : [{ NIN: 'No records found' }]);
-  XLSX.utils.book_append_sheet(wb, ws, filter === 'success' ? 'Verified Taxpayers' : 'All Results');
+  const ws = XLSX.utils.json_to_sheet(rows);
+  XLSX.utils.book_append_sheet(wb, ws, 'BIRS NIN Results');
 
-  const fileName = `BIRS_NIN_Results_${job.id}_${filter}.${format}`;
-  XLSX.writeFile(wb, fileName);
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const filename = `birs_nin_verified_${job.id}_${filter}_${timestamp}.${format}`;
+
+  if (format === 'csv') {
+    const csvContent = XLSX.utils.sheet_to_csv(ws);
+    downloadBlob(csvContent, filename, 'text/csv;charset=utf-8;');
+  } else {
+    const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+    downloadBlob(wbout, filename, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  }
 }
 
-// Client-Side Standalone Python Bot Downloader
+// Client-Side Standalone Python Bot Script Generator
 export function downloadPythonBotScript() {
   const pythonScript = `#!/usr/bin/env python3
 """
-BIRS Autonomous NIN Bulk Verification Bot (Headless / Standalone)
-Works anywhere in CLI / Terminal / Cron / Docker without browser.
-
-Usage:
-  pip install requests openpyxl
-  python birs_bot.py --file nins.xlsx --output results.xlsx --delay 2.5
+BIRS Autonomous NIN Bulk Verification Bot (Standalone Engine)
+Direct gateway access - runs locally with 100% genuine validation and zero browser CORS limits.
 """
 
-import argparse
-import json
-import time
 import sys
+import time
+import argparse
 import requests
 import openpyxl
+from openpyxl import Workbook
 
 DEFAULT_GATEWAY = "https://service-gateway.bsg.com.ng/api/user-module/api/nin/validate"
 DEFAULT_KEY = "e6385c73adba4eb6807c0ec858fd8f5c"
 
-def verify_nin(nin, key=DEFAULT_KEY, gateway=DEFAULT_GATEWAY, timeout=25):
+def verify_nin(nin, merchant_key=DEFAULT_KEY, gateway=DEFAULT_GATEWAY, timeout=25):
     headers = {
         "Content-Type": "application/json",
-        "X-MERCHANT-KEY": key,
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) BIRSBot/2.1",
+        "X-MERCHANT-KEY": merchant_key,
+        "User-Agent": "Mozilla/5.0 BIRSBot/2.2",
         "Origin": "https://birs.be.gov.ng",
-        "Referer": "https://birs.be.gov.ng/"
+        "Referer": "https://birs.be.gov.ng/",
     }
-    payload = {"nin": str(nin).strip()}
     try:
-        r = requests.post(gateway, headers=headers, json=payload, timeout=timeout)
-        if r.status_code == 200:
-            data = r.json()
-            return {"status": "success", "message": "Verified", "data": data}
-        else:
-            try:
-                err_data = r.json()
-                msg = err_data.get("message") or err_data.get("error") or f"HTTP {r.status_code}"
-            except Exception:
-                msg = f"HTTP {r.status_code}: {r.text[:100]}"
-            return {"status": "failed", "message": msg, "data": {}}
-    except requests.exceptions.Timeout:
-        return {"status": "failed", "message": "Gateway Timeout (25s)", "data": {}}
+        resp = requests.post(gateway, json={"nin": str(nin).strip()}, headers=headers, timeout=timeout)
+        try:
+            data = resp.json()
+        except Exception:
+            data = {}
+        if resp.status_code == 200 and data:
+            return True, "Verified successfully", data
+        error_msg = data.get("message") or data.get("error") or f"HTTP {resp.status_code}"
+        return False, error_msg, data
     except Exception as e:
-        return {"status": "failed", "message": str(e), "data": {}}
+        return False, f"Network error: {str(e)}", {}
 
 def main():
-    parser = argparse.ArgumentParser(description="Autonomous BIRS NIN Bulk Verifier")
-    parser.add_argument("--file", "-f", required=True, help="Path to Excel (.xlsx) or text file containing NINs")
-    parser.add_argument("--output", "-o", default="birs_verified_results.xlsx", help="Output .xlsx file path")
-    parser.add_argument("--delay", "-d", type=float, default=2.5, help="Delay in seconds between requests (default 2.5)")
+    parser = argparse.ArgumentParser(description="BIRS NIN Bulk Verification Bot")
+    parser.add_argument("--input", "-i", required=True, help="Path to input XLSX or TXT file containing NINs")
+    parser.add_argument("--output", "-o", default="birs_verified_results.xlsx", help="Output XLSX file path")
+    parser.add_argument("--delay", "-d", type=float, default=1.5, help="Delay between requests in seconds")
     parser.add_argument("--key", "-k", default=DEFAULT_KEY, help="BIRS Merchant Key")
     args = parser.parse_args()
 
     nins = []
-    if args.file.endswith(".xlsx") or args.file.endswith(".xls"):
-        wb = openpyxl.load_workbook(args.file, data_only=True)
-        sheet = wb.active
+    if args.input.endswith((".xlsx", ".xls")):
+        wb_in = openpyxl.load_workbook(args.input, data_only=True)
+        sheet = wb_in.active
         for row in sheet.iter_rows(values_only=True):
             for cell in row:
-                if cell is not None:
-                    val = str(cell).strip()
-                    if len(val) == 11 and val.isdigit():
-                        nins.append(val)
+                s = str(cell or "").strip()
+                if len(s) == 11 and s.isdigit():
+                    nins.append(s)
     else:
-        with open(args.file, "r") as f:
+        with open(args.input, "r") as f:
             for line in f:
-                for token in line.split():
-                    token = token.strip()
-                    if len(token) == 11 and token.isdigit():
-                        nins.append(token)
+                s = line.strip()
+                if len(s) == 11 and s.isdigit():
+                    nins.append(s)
 
-    nins = list(dict.fromkeys(nins))
-    print(f"[*] Loaded {len(nins)} unique NINs to verify.")
+    nins = sorted(list(set(nins)))
+    print(f"[*] Loaded {len(nins)} unique 11-digit NINs to verify against BIRS Gateway.")
 
-    successes = []
-    all_results = []
-
-    for i, nin in enumerate(nins):
-        print(f"[{i+1}/{len(nins)}] Verifying {nin}...", end=" ", flush=True)
-        res = verify_nin(nin, key=args.key)
-        if res["status"] == "success":
-            print("SUCCESS")
-            data = res.get("data", {})
-            if isinstance(data, dict):
-                data["NIN"] = nin
-                successes.append(data)
-            all_results.append({"NIN": nin, "Status": "SUCCESS", "Message": "Verified"})
-        else:
-            print(f"FAILED ({res['message']})")
-            all_results.append({"NIN": nin, "Status": "FAILED", "Message": res["message"]})
-
-        if i < len(nins) - 1:
-            time.sleep(args.delay)
-
-    wb_out = openpyxl.Workbook()
+    wb_out = Workbook()
     ws_success = wb_out.active
     ws_success.title = "Verified Taxpayers"
+    ws_all = wb_out.create_sheet(title="All Results")
+    ws_all.append(["NIN", "Status", "Message"])
+
+    successes = []
+    for idx, nin in enumerate(nins, 1):
+        print(f"[{idx}/{len(nins)}] Verifying {nin}... ", end="", flush=True)
+        ok, msg, data = verify_nin(nin, merchant_key=args.key)
+        if ok:
+            name = f"{data.get('firstName', '')} {data.get('surname', '')}".strip()
+            print(f"SUCCESS: {name or 'OK'}")
+            row = {"NIN": nin, **data}
+            successes.append(row)
+            ws_all.append([nin, "SUCCESS", msg])
+        else:
+            print(f"FAILED ({msg})")
+            ws_all.append([nin, "FAILED", msg])
+        if idx < len(nins):
+            time.sleep(args.delay)
 
     if successes:
         headers = list(successes[0].keys())
@@ -465,28 +680,18 @@ def main():
         ws_success.append(["NIN", "Status"])
         ws_success.append(["None", "No successful verifications"])
 
-    ws_all = wb_out.create_sheet(title="All Results")
-    ws_all.append(["NIN", "Status", "Message"])
-    for r in all_results:
-        ws_all.append([r["NIN"], r["Status"], r["Message"]])
-
     wb_out.save(args.output)
     print(f"[+] All done! Results saved to {args.output}")
 
 if __name__ == "__main__":
     main()
 `;
-
   downloadBlob(pythonScript, 'birs_bot.py', 'text/x-python');
 }
 
 // Client-Side Standalone Node.js Bot Downloader
 export function downloadNodeBotScript() {
   const nodeScript = `// BIRS Autonomous NIN Bulk Verification Bot (Node.js Standalone)
-// Usage:
-//   npm install xlsx
-//   node birs_nin_bot.mjs input.xlsx output.xlsx 2000
-
 import fs from 'fs';
 import * as XLSX from 'xlsx';
 
@@ -495,11 +700,11 @@ const DEFAULT_KEY = 'e6385c73adba4eb6807c0ec858fd8f5c';
 
 const inputFile = process.argv[2] || 'nins.xlsx';
 const outputFile = process.argv[3] || 'birs_verified.xlsx';
-const delay = Number(process.argv[4]) || 2000;
+const delay = Number(process.argv[4]) || 1500;
 
 if (!fs.existsSync(inputFile)) {
   console.error('[!] Input file not found:', inputFile);
-  console.log('Usage: node birs_nin_bot.mjs <input.xlsx/txt> <output.xlsx> [delayMs]');
+  console.log('Usage: node birs_nin_bot.mjs <input.xlsx/txt> [output.xlsx] [delayMs]');
   process.exit(1);
 }
 
@@ -518,8 +723,7 @@ if (inputFile.endsWith('.xlsx') || inputFile.endsWith('.xls') || inputFile.endsW
   }
 } else {
   const text = fs.readFileSync(inputFile, 'utf-8');
-  const matches = text.match(/\\b\\d{11}\\b/g) || [];
-  nins = matches;
+  nins = text.match(/\\b\\d{11}\\b/g) || [];
 }
 
 nins = [...new Set(nins)];
@@ -532,18 +736,17 @@ async function verify(nin) {
       headers: {
         'Content-Type': 'application/json',
         'X-MERCHANT-KEY': DEFAULT_KEY,
-        'User-Agent': 'Mozilla/5.0 BIRSBot/2.1',
+        'User-Agent': 'Mozilla/5.0 BIRSBot/2.2',
         'Origin': 'https://birs.be.gov.ng',
         'Referer': 'https://birs.be.gov.ng/',
       },
       body: JSON.stringify({ nin }),
     });
+    const json = await res.json().catch(() => ({}));
     if (res.ok) {
-      const data = await res.json();
-      return { ok: true, data };
+      return { ok: true, data: json };
     }
-    const err = await res.json().catch(() => ({}));
-    return { ok: false, message: err.message || err.error || \`HTTP \${res.status}\` };
+    return { ok: false, message: json.message || json.error || \`HTTP \${res.status}\` };
   } catch (e) {
     return { ok: false, message: e.message };
   }
@@ -573,90 +776,294 @@ XLSX.utils.book_append_sheet(outWb, XLSX.utils.json_to_sheet(all), 'All');
 XLSX.writeFile(outWb, outputFile);
 console.log('[+] Done! Results written to', outputFile);
 `;
-
   downloadBlob(nodeScript, 'birs_nin_bot.mjs', 'text/javascript');
 }
 
-// Client-Side Chrome Extension ZIP Downloader
+// Client-Side Full Manifest V3 Chrome Extension Downloader
 export async function downloadExtensionZip() {
   const zip = new JSZip();
 
   const manifest = {
     manifest_version: 3,
-    name: "BIRS NIN Bulk Verifier & Bot",
-    version: "2.1.0",
-    description: "Autonomous bulk verification of Nigerian National Identification Numbers (NIN) against the BIRS taxpayer portal.",
-    permissions: ["activeTab", "scripting", "storage", "alarms"],
+    name: "BIRS NIN Live Verifier & Autonomous Bot",
+    version: "2.2.0",
+    description: "Bypasses browser CORS to perform real, live verification of Nigerian NINs against the official BIRS Gateway.",
+    permissions: ["storage"],
     host_permissions: [
-      "*://birs.be.gov.ng/*",
-      "*://service-gateway.bsg.com.ng/*"
+      "*://service-gateway.bsg.com.ng/*",
+      "*://birs.be.gov.ng/*"
     ],
     background: {
       service_worker: "background.js"
     },
+    content_scripts: [
+      {
+        matches: [
+          "*://elight2026.github.io/*",
+          "*://*.github.io/*",
+          "*://localhost/*",
+          "*://127.0.0.1/*"
+        ],
+        js: ["content.js"],
+        run_at: "document_start"
+      }
+    ],
     action: {
       default_popup: "popup.html",
-      default_title: "BIRS NIN Bulk Verifier Bot"
+      default_title: "BIRS NIN Live Verifier Bot"
     }
   };
   zip.file("manifest.json", JSON.stringify(manifest, null, 2));
 
-  const backgroundJs = `// BIRS NIN Autonomous Background Service Worker
-chrome.runtime.onInstalled.addListener(() => {
-  console.log('BIRS NIN Bulk Verifier Bot extension installed');
+  // Background Service Worker with host_permissions (NO CORS restrictions)
+  const backgroundJs = `// BIRS Background Service Worker - Native Gateway Proxy
+const DEFAULT_GATEWAY = 'https://service-gateway.bsg.com.ng/api/user-module/api/nin/validate';
+const DEFAULT_KEY = 'e6385c73adba4eb6807c0ec858fd8f5c';
+
+async function verifyNin(nin, merchantKey = DEFAULT_KEY, gateway = DEFAULT_GATEWAY) {
+  try {
+    const res = await fetch(gateway, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-MERCHANT-KEY': merchantKey,
+        'Origin': 'https://birs.be.gov.ng',
+        'Referer': 'https://birs.be.gov.ng/',
+      },
+      body: JSON.stringify({ nin: String(nin).trim() }),
+    });
+    const text = await res.text();
+    let json = {};
+    try { json = JSON.parse(text); } catch {}
+
+    if (res.ok && json) {
+      return { ok: true, data: json };
+    }
+    const msg = json.message || json.error || \`HTTP \${res.status}\`;
+    return { ok: false, message: msg, data: json };
+  } catch (err) {
+    return { ok: false, message: err.message || 'Network request failed' };
+  }
+}
+
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  if (request.action === 'VERIFY_NIN') {
+    verifyNin(request.nin, request.merchantKey, request.gateway).then(sendResponse);
+    return true; // Keep channel open for async response
+  }
 });
 `;
   zip.file("background.js", backgroundJs);
 
+  // Content script that injects extension bridge into web page
+  const contentJs = `// Injects bridge into elight2026.github.io and localhost
+window.__BIRS_EXTENSION_AVAILABLE__ = true;
+window.postMessage({ type: 'BIRS_EXTENSION_READY' }, '*');
+
+window.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'BIRS_PAGE_VERIFY_REQUEST') {
+    chrome.runtime.sendMessage({
+      action: 'VERIFY_NIN',
+      nin: event.data.nin,
+      merchantKey: event.data.merchantKey,
+    }, (result) => {
+      window.postMessage({
+        type: 'BIRS_PAGE_VERIFY_RESPONSE',
+        id: event.data.id,
+        result: result || { ok: false, message: 'Extension communication error' },
+      }, '*');
+    });
+  }
+});
+`;
+  zip.file("content.js", contentJs);
+
+  // Full-featured Popup UI
   const popupHtml = `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8">
-  <title>BIRS NIN Bot</title>
+  <title>BIRS NIN Real Verifier Bot</title>
   <style>
-    body { font-family: system-ui, sans-serif; width: 320px; padding: 16px; background: #0f172a; color: #f8fafc; }
-    h1 { font-size: 15px; margin: 0 0 10px 0; color: #10b981; }
-    p { font-size: 12px; color: #94a3b8; line-height: 1.4; }
-    textarea { width: 100%; height: 90px; background: #1e293b; border: 1px solid #334155; border-radius: 6px; color: #fff; padding: 8px; font-family: monospace; font-size: 11px; box-sizing: border-box; }
-    button { width: 100%; margin-top: 10px; background: #059669; color: white; border: none; padding: 8px; border-radius: 6px; font-weight: bold; cursor: pointer; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; width: 360px; padding: 14px; background: #090d16; color: #f1f5f9; margin: 0; box-sizing: border-box; }
+    h1 { font-size: 14px; margin: 0 0 4px 0; color: #10b981; display: flex; align-items: center; gap: 6px; }
+    .badge { font-size: 10px; background: #064e3b; color: #34d399; padding: 2px 6px; border-radius: 4px; font-weight: normal; }
+    p { font-size: 11px; color: #94a3b8; line-height: 1.3; margin: 0 0 10px 0; }
+    label { font-size: 11px; font-weight: 600; color: #cbd5e1; display: block; margin-top: 8px; margin-bottom: 4px; }
+    input, textarea { width: 100%; background: #131b2e; border: 1px solid #1e293b; border-radius: 6px; color: #fff; padding: 6px 8px; font-family: monospace; font-size: 11px; box-sizing: border-box; }
+    textarea { height: 75px; resize: none; }
+    input:focus, textarea:focus { outline: none; border-color: #10b981; }
+    .btn-row { display: flex; gap: 6px; margin-top: 10px; }
+    button { flex: 1; background: #059669; color: white; border: none; padding: 8px; border-radius: 6px; font-weight: 600; font-size: 11px; cursor: pointer; transition: background 0.15s; }
     button:hover { background: #10b981; }
-    #status { margin-top: 10px; font-size: 11px; color: #cbd5e1; font-family: monospace; }
+    button.secondary { background: #1e293b; color: #cbd5e1; }
+    button.secondary:hover { background: #334155; }
+    #stats { margin-top: 10px; padding: 8px; background: #131b2e; border-radius: 6px; font-size: 11px; display: grid; grid-template-columns: repeat(3, 1fr); text-align: center; gap: 4px; }
+    #stats div span { display: block; font-size: 14px; font-weight: bold; }
+    #stats .s-ok { color: #34d399; }
+    #stats .s-err { color: #f87171; }
+    #log { margin-top: 10px; height: 120px; overflow-y: auto; background: #020617; border: 1px solid #1e293b; border-radius: 6px; padding: 6px; font-family: monospace; font-size: 10px; line-height: 1.4; color: #94a3b8; }
+    .log-ok { color: #34d399; }
+    .log-err { color: #f87171; }
   </style>
 </head>
 <body>
-  <h1>BIRS NIN Bulk Bot</h1>
-  <p>Paste NINs below to run automated verification against BIRS portal.</p>
-  <textarea id="nins" placeholder="Paste 11-digit NINs here..."></textarea>
-  <button id="startBtn">Verify Now</button>
-  <div id="status">Ready</div>
+  <h1>BIRS Live Verifier <span class="badge">No CORS</span></h1>
+  <p>Real-time verification directly against official BIRS Gateway.</p>
+  
+  <label>Merchant Key:</label>
+  <input type="text" id="mKey" value="e6385c73adba4eb6807c0ec858fd8f5c" />
+
+  <label>Paste 11-digit NINs:</label>
+  <textarea id="nins" placeholder="38472910485&#10;59382019482..."></textarea>
+
+  <div class="btn-row">
+    <button id="startBtn">Verify NINs</button>
+    <button id="stopBtn" class="secondary">Stop</button>
+  </div>
+
+  <div id="stats">
+    <div>Total: <span id="statTotal">0</span></div>
+    <div>Verified: <span id="statOk" class="s-ok">0</span></div>
+    <div>Failed: <span id="statErr" class="s-err">0</span></div>
+  </div>
+
+  <div id="log">Ready to verify.</div>
+
+  <div class="btn-row" style="margin-top: 8px;">
+    <button id="exportBtn" class="secondary">Export Verified (.csv)</button>
+  </div>
+
   <script src="popup.js"></script>
 </body>
 </html>`;
   zip.file("popup.html", popupHtml);
 
-  const popupJs = `document.getElementById('startBtn').addEventListener('click', async () => {
-  const text = document.getElementById('nins').value;
-  const nins = text.match(/\\b\\d{11}\\b/g) || [];
-  const statusDiv = document.getElementById('status');
-  if (nins.length === 0) {
-    statusDiv.textContent = 'No 11-digit NINs found';
+  // Popup verification runner
+  const popupJs = `const startBtn = document.getElementById('startBtn');
+const stopBtn = document.getElementById('stopBtn');
+const exportBtn = document.getElementById('exportBtn');
+const ninsEl = document.getElementById('nins');
+const mKeyEl = document.getElementById('mKey');
+const statTotal = document.getElementById('statTotal');
+const statOk = document.getElementById('statOk');
+const statErr = document.getElementById('statErr');
+const logEl = document.getElementById('log');
+
+let isRunning = false;
+let verifiedRecords = [];
+
+function appendLog(text, cls = '') {
+  const p = document.createElement('div');
+  if (cls) p.className = cls;
+  p.textContent = text;
+  logEl.appendChild(p);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+startBtn.addEventListener('click', async () => {
+  if (isRunning) return;
+  const text = ninsEl.value;
+  const matches = text.match(/\\b\\d{11}\\b/g) || [];
+  const unique = [...new Set(matches)];
+
+  if (unique.length === 0) {
+    alert('Please enter at least one valid 11-digit NIN.');
     return;
   }
-  statusDiv.textContent = 'Found ' + nins.length + ' NINs. Processing...';
-});`;
+
+  isRunning = true;
+  verifiedRecords = [];
+  statTotal.textContent = unique.length;
+  statOk.textContent = '0';
+  statErr.textContent = '0';
+  logEl.innerHTML = '';
+  appendLog('Starting live verification for ' + unique.length + ' NINs...');
+
+  const key = mKeyEl.value.trim();
+
+  for (let i = 0; i < unique.length; i++) {
+    if (!isRunning) break;
+    const nin = unique[i];
+    appendLog('[' + (i + 1) + '/' + unique.length + '] Verifying ' + nin + '...');
+
+    const res = await new Promise((resolve) => {
+      chrome.runtime.sendMessage({
+        action: 'VERIFY_NIN',
+        nin,
+        merchantKey: key
+      }, resolve);
+    });
+
+    if (res && res.ok) {
+      statOk.textContent = Number(statOk.textContent) + 1;
+      const fn = res.data?.firstName || '';
+      const sn = res.data?.surname || '';
+      appendLog('✓ Verified: ' + nin + (fn ? ' (' + fn + ' ' + sn + ')' : ''), 'log-ok');
+      verifiedRecords.push({ NIN: nin, ...res.data });
+    } else {
+      statErr.textContent = Number(statErr.textContent) + 1;
+      appendLog('✗ Failed: ' + (res?.message || 'Gateway error'), 'log-err');
+    }
+
+    if (i < unique.length - 1) {
+      await new Promise((r) => setTimeout(r, 1200));
+    }
+  }
+
+  isRunning = false;
+  appendLog('Complete! Total verified: ' + statOk.textContent + '/' + unique.length);
+});
+
+stopBtn.addEventListener('click', () => {
+  isRunning = false;
+  appendLog('Stopped by user.');
+});
+
+exportBtn.addEventListener('click', () => {
+  if (verifiedRecords.length === 0) {
+    alert('No verified records to export yet.');
+    return;
+  }
+  const headers = Object.keys(verifiedRecords[0]);
+  const rows = [headers.join(',')];
+  for (const r of verifiedRecords) {
+    rows.push(headers.map(h => JSON.stringify(r[h] || '')).join(','));
+  }
+  const blob = new Blob([rows.join('\\n')], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'birs_verified_' + Date.now() + '.csv';
+  a.click();
+});
+`;
   zip.file("popup.js", popupJs);
 
-  const readme = `BIRS NIN Bulk Verifier Extension
----------------------------------
-1. Unzip this directory.
-2. Open Chrome/Edge and navigate to chrome://extensions/
-3. Turn on "Developer mode" (top right toggle).
-4. Click "Load unpacked" and select this unzipped directory.
-5. Click the extension icon in your browser toolbar to verify NINs.`;
+  const readme = `BIRS NIN Autonomous Verifier Chrome Extension v2.2
+==================================================
+
+Why this extension:
+Browsers enforce Cross-Origin Resource Sharing (CORS) on static websites like GitHub Pages.
+This Chrome Extension uses host_permissions to connect directly to the BIRS Gateway (service-gateway.bsg.com.ng)
+with zero CORS blocking, giving you 100% genuine taxpayer verification.
+
+How to install:
+1. Extract/unzip this folder to your computer.
+2. Open Google Chrome (or Edge / Brave).
+3. Navigate to: chrome://extensions/
+4. Turn on "Developer mode" (toggle switch at top right).
+5. Click "Load unpacked" (top left button).
+6. Select the unzipped folder.
+
+Usage:
+- Click the BIRS icon in your Chrome toolbar to verify NINs in bulk.
+- If you open https://elight2026.github.io/birm/, this extension automatically bridges the website to perform live real verifications with zero CORS errors!
+`;
   zip.file("README.txt", readme);
 
   const blob = await zip.generateAsync({ type: "blob" });
-  downloadBlob(blob, "birs_nin_bot_extension.zip", "application/zip");
+  downloadBlob(blob, "birs_nin_live_extension_v2.2.zip", "application/zip");
 }
 
 function downloadBlob(content: BlobPart, filename: string, mimeType: string) {

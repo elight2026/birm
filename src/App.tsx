@@ -122,8 +122,16 @@ export default function App() {
   const [fileName, setFileName] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
 
-  // Engine Mode: Demo/Sandbox (Instant realistic simulation) vs Live Gateway
-  const [isDemoMode, setIsDemoMode] = useState(true);
+  // Engine Mode: Live Gateway (Real Verification - Default) vs Optional Simulated Sandbox
+  const [isDemoMode, setIsDemoMode] = useState(false);
+  const [proxyUrl, setProxyUrl] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('birs_proxy_url') || '';
+    }
+    return '';
+  });
+  const [gatewayUrl, setGatewayUrl] = useState<string>(DEFAULT_GATEWAY_URL);
+  const [isExtensionConnected, setIsExtensionConnected] = useState(false);
 
   // Bot Settings Controls
   const [delayMs, setDelayMs] = useState(2000);
@@ -199,6 +207,20 @@ export default function App() {
       fetchJobs();
     }, 3500);
     return () => clearInterval(interval);
+  }, []);
+
+  // Detect Chrome Extension Bridge
+  useEffect(() => {
+    if (typeof window !== 'undefined' && (window as any).__BIRS_EXTENSION_AVAILABLE__) {
+      setIsExtensionConnected(true);
+    }
+    const onExtMsg = (e: MessageEvent) => {
+      if (e.data?.type === 'BIRS_EXTENSION_READY') {
+        setIsExtensionConnected(true);
+      }
+    };
+    window.addEventListener('message', onExtMsg);
+    return () => window.removeEventListener('message', onExtMsg);
   }, []);
 
   // Real-time SSE connection with polling fallback (active only when server is available)
@@ -438,8 +460,9 @@ export default function App() {
           concurrency,
           maxRetries,
           timeoutMs: 25000,
-          merchantKey,
-          gatewayUrl: DEFAULT_GATEWAY_URL,
+          merchantKey: merchantKey.trim(),
+          gatewayUrl: gatewayUrl || DEFAULT_GATEWAY_URL,
+          proxyUrl: proxyUrl.trim() || undefined,
           autoRetry,
           isDemo: isDemoMode,
         },
@@ -455,7 +478,10 @@ export default function App() {
 
       setCurrentJob(newJob);
       saveLocalJob(newJob);
-      showToast(`In-Browser Bot started for ${nins.length} NINs [${isDemoMode ? 'Sandbox' : 'Live Gateway'}]`, 'success');
+      showToast(
+        `Autonomous Bot started for ${nins.length} NINs [${isDemoMode ? 'Simulated Sandbox' : 'Live Gateway Real Verification'}]`,
+        'success'
+      );
       clientBotManagerRef.current?.runJob(newJob);
       return;
     }
@@ -595,47 +621,52 @@ export default function App() {
     setSingleLoading(true);
     setSingleResult(null);
 
-    // If browser mode or server is offline, verify directly in browser
-    if (engineMode === 'browser' || !isServerAvailable) {
-      const res = await verifyNinInBrowser(clean, merchantKey, DEFAULT_GATEWAY_URL, isDemoMode, true);
-      setSingleResult({
-        status: res.ok ? 'success' : 'failed',
-        message: res.message,
-        details: res.data || {},
-        durationMs: res.durationMs,
-        nin: clean,
-        timestamp: new Date().toISOString(),
-        isCorsFallback: res.isCorsFallback,
-      });
-      if (res.ok) {
-        if (res.isCorsFallback) {
-          showToast('Taxpayer verified (Sandbox Fallback: Live gateway blocked by browser CORS)', 'info');
+    // 1. If server backend is available and in server mode, query backend proxy (/api/verify)
+    if (isServerAvailable && engineMode === 'server') {
+      try {
+        const res = await fetch('/api/verify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            nin: clean,
+            merchantKey: merchantKey.trim(),
+            gatewayUrl: gatewayUrl || DEFAULT_GATEWAY_URL,
+            isDemo: isDemoMode,
+          }),
+        });
+        const data = await res.json();
+        setSingleResult({
+          status: data.status,
+          message: data.message,
+          details: data.details || {},
+          durationMs: data.durationMs || 0,
+          nin: clean,
+          timestamp: new Date().toISOString(),
+          isDemoSimulation: isDemoMode,
+          source: 'BIRS Live Gateway (via Server)',
+        });
+        if (data.status === 'success') {
+          showToast('Taxpayer NIN verified successfully via Live Gateway!', 'success');
         } else {
-          showToast('Taxpayer NIN verified successfully!', 'success');
+          showToast(`Verification failed: ${data.message}`, 'error');
         }
-      } else {
-        showToast('Verification failed: ' + res.message, 'error');
+        setSingleLoading(false);
+        return;
+      } catch {
+        // Fall through to browser/proxy verification below
       }
-      setSingleLoading(false);
-      return;
     }
 
+    // 2. Direct browser execution / Proxy / Extension Bridge (100% genuine)
     try {
-      const res = await fetch('/api/verify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ nin: clean, merchantKey, isDemo: isDemoMode }),
-      });
-      const data = await res.json();
-      setSingleResult(data);
-      if (data.status === 'success') {
-        showToast('Taxpayer NIN verified successfully!', 'success');
-      } else {
-        showToast('Verification failed: ' + data.message, 'error');
-      }
-    } catch {
-      // In-browser fallback
-      const res = await verifyNinInBrowser(clean, merchantKey, DEFAULT_GATEWAY_URL, isDemoMode, true);
+      const res = await verifyNinInBrowser(
+        clean,
+        merchantKey.trim(),
+        gatewayUrl || DEFAULT_GATEWAY_URL,
+        isDemoMode,
+        proxyUrl.trim() || undefined
+      );
+
       setSingleResult({
         status: res.ok ? 'success' : 'failed',
         message: res.message,
@@ -643,17 +674,35 @@ export default function App() {
         durationMs: res.durationMs,
         nin: clean,
         timestamp: new Date().toISOString(),
-        isCorsFallback: res.isCorsFallback,
+        isCorsBlocked: res.isCorsBlocked,
+        isDemoSimulation: res.isDemoSimulation,
+        source: res.source,
       });
+
       if (res.ok) {
-        if (res.isCorsFallback) {
-          showToast('Taxpayer verified (Sandbox Fallback: Live gateway blocked by browser CORS)', 'info');
-        } else {
-          showToast('Taxpayer NIN verified successfully (client fallback)!', 'success');
-        }
+        showToast(
+          isDemoMode
+            ? 'Taxpayer verified (Simulated Demo Sandbox)'
+            : `Taxpayer NIN verified successfully via ${res.source || 'Live Gateway'}!`,
+          'success'
+        );
       } else {
-        showToast('Verification failed: ' + res.message, 'error');
+        if (res.isCorsBlocked) {
+          showToast('Browser CORS blocked direct gateway access. See solutions below.', 'error');
+        } else {
+          showToast(`Verification failed: ${res.message}`, 'error');
+        }
       }
+    } catch (err: any) {
+      setSingleResult({
+        status: 'failed',
+        message: err?.message || 'Verification error occurred',
+        details: {},
+        durationMs: 0,
+        nin: clean,
+        timestamp: new Date().toISOString(),
+      });
+      showToast(`Verification error: ${err?.message || 'Failed to verify'}`, 'error');
     } finally {
       setSingleLoading(false);
     }
@@ -1454,7 +1503,7 @@ export default function App() {
                               {r.status === 'success' ? (
                                 <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-400 bg-emerald-500/10 border border-emerald-500/30 px-2 py-0.5 rounded-full">
                                   <CheckCircle2 className="w-3 h-3" />
-                                  <span>{r.isCorsFallback ? 'Verified (CORS Fallback)' : 'Verified'}</span>
+                                  <span>{r.isDemoSimulation ? 'Verified (Demo)' : 'Verified'}</span>
                                 </span>
                               ) : (
                                 <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-red-400 bg-red-500/10 border border-red-500/30 px-2 py-0.5 rounded-full">
@@ -1503,37 +1552,60 @@ export default function App() {
                 Query the live BIRS identity validation portal directly for individual taxpayer lookup and verification.
               </p>
 
-              {/* Mode status & Quick Demo Buttons */}
+              {/* Mode status & Connection Indicators */}
               <div className="space-y-2 mb-4">
                 <div className="flex items-center justify-between flex-wrap gap-2 p-3 bg-slate-950 rounded-xl border border-slate-800 text-xs">
-                  <div className="flex items-center gap-2">
-                    <span className="text-slate-400">Environment:</span>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-slate-400">Mode:</span>
                     <button
                       type="button"
                       onClick={() => {
                         const next = !isDemoMode;
                         setIsDemoMode(next);
-                        showToast(`Switched to ${next ? 'Sandbox Mode' : 'Live Gateway'}`, 'info');
+                        showToast(`Switched to ${next ? 'Simulated Sandbox Mode' : 'Live Gateway (Real Verification)'}`, 'info');
                       }}
                       className={`font-semibold flex items-center gap-1.5 cursor-pointer px-2.5 py-1 rounded-lg border transition-all ${
-                        isDemoMode
+                        !isDemoMode
                           ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30 hover:bg-emerald-500/20'
                           : 'text-amber-400 bg-amber-500/10 border-amber-500/30 hover:bg-amber-500/20'
                       }`}
-                      title="Click to toggle between Sandbox and Live Gateway"
+                      title="Click to toggle between Live Gateway and Simulated Demo Sandbox"
                     >
-                      {isDemoMode ? <Sparkles className="w-3.5 h-3.5" /> : <Zap className="w-3.5 h-3.5" />}
-                      <span>{isDemoMode ? 'Sandbox Mode (Offline / CORS-Free)' : 'Live Gateway'}</span>
+                      {!isDemoMode ? <Zap className="w-3.5 h-3.5 text-emerald-400" /> : <Sparkles className="w-3.5 h-3.5 text-amber-400" />}
+                      <span>{!isDemoMode ? 'Live Gateway (Real Verification)' : 'Simulated Sandbox (Test Data)'}</span>
                     </button>
+
+                    {/* Connection Status Badge */}
+                    {isExtensionConnected ? (
+                      <span className="text-[11px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 px-2 py-0.5 rounded-full font-semibold flex items-center gap-1">
+                        <Puzzle className="w-3 h-3 text-emerald-400" />
+                        <span>Chrome Extension Connected (No CORS)</span>
+                      </span>
+                    ) : proxyUrl ? (
+                      <span className="text-[11px] bg-blue-500/20 text-blue-300 border border-blue-500/40 px-2 py-0.5 rounded-full font-semibold flex items-center gap-1">
+                        <Server className="w-3 h-3 text-blue-400" />
+                        <span>Relay Proxy Active</span>
+                      </span>
+                    ) : isServerAvailable ? (
+                      <span className="text-[11px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 px-2 py-0.5 rounded-full font-semibold flex items-center gap-1">
+                        <Server className="w-3 h-3 text-emerald-400" />
+                        <span>Backend Server Connected</span>
+                      </span>
+                    ) : (
+                      <span className="text-[11px] bg-slate-800 text-slate-400 border border-slate-700 px-2 py-0.5 rounded-full font-medium flex items-center gap-1">
+                        <Globe className="w-3 h-3 text-slate-400" />
+                        <span>Direct Browser Gateway</span>
+                      </span>
+                    )}
                   </div>
+
                   <div className="flex items-center gap-1.5">
-                    <span className="text-slate-500 text-[11px]">Quick Samples:</span>
+                    <span className="text-slate-500 text-[11px]">NIN Samples:</span>
                     <button
                       type="button"
                       onClick={() => {
                         setSingleNin('10293847561');
-                        setIsDemoMode(true);
-                        showToast('Filled sample NIN 10293847561 in Sandbox Mode', 'info');
+                        showToast('Filled NIN 10293847561', 'info');
                       }}
                       className="px-2 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-[11px] font-mono cursor-pointer"
                     >
@@ -1543,8 +1615,7 @@ export default function App() {
                       type="button"
                       onClick={() => {
                         setSingleNin('29384756102');
-                        setIsDemoMode(true);
-                        showToast('Filled sample NIN 29384756102 in Sandbox Mode', 'info');
+                        showToast('Filled NIN 29384756102', 'info');
                       }}
                       className="px-2 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-[11px] font-mono cursor-pointer"
                     >
@@ -1553,11 +1624,11 @@ export default function App() {
                   </div>
                 </div>
 
-                {!isDemoMode && (!isServerAvailable || (typeof window !== 'undefined' && window.location.hostname.includes('github.io'))) && (
+                {!isDemoMode && !isServerAvailable && !proxyUrl && !isExtensionConnected && (typeof window !== 'undefined' && window.location.hostname.includes('github.io')) && (
                   <div className="text-[11px] text-amber-300 bg-amber-950/40 border border-amber-500/30 p-2.5 rounded-xl flex items-start gap-2">
                     <ShieldAlert className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
                     <span className="leading-relaxed">
-                      <strong>CORS Resilience Active:</strong> Modern browsers restrict direct cross-origin API calls to the BIRS gateway from static web pages. If browser CORS blocks direct contact, the app will automatically authenticate the record via the high-fidelity Sandbox Engine. For 100% direct server-to-server gateway queries, run the included Python/Node.js CLI or Chrome Extension.
+                      <strong>Direct Gateway Connection:</strong> Modern web browsers restrict direct cross-origin calls from static hosting (github.io) to the official BIRS Gateway. If your browser blocks the request, <strong>no fake data will be generated</strong>. You can install the Chrome Extension v2.2, run the desktop bot, or enter a Relay Proxy URL in Settings.
                     </span>
                   </div>
                 )}
@@ -1582,21 +1653,17 @@ export default function App() {
                 <button
                   type="submit"
                   disabled={singleLoading || singleNin.length !== 11}
-                  className={`w-full py-3 ${
-                    isDemoMode
-                      ? 'bg-emerald-600 hover:bg-emerald-500 shadow-emerald-900/30'
-                      : 'bg-amber-600 hover:bg-amber-500 shadow-amber-900/30'
-                  } disabled:opacity-50 text-white font-semibold rounded-xl text-sm flex items-center justify-center gap-2 shadow-lg transition-all cursor-pointer disabled:cursor-not-allowed`}
+                  className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 shadow-emerald-900/30 disabled:opacity-50 text-white font-semibold rounded-xl text-sm flex items-center justify-center gap-2 shadow-lg transition-all cursor-pointer disabled:cursor-not-allowed"
                 >
                   {singleLoading ? (
                     <>
                       <RefreshCw className="w-4 h-4 animate-spin" />
-                      <span>Validating with {isDemoMode ? 'Sandbox Engine' : 'BIRS Gateway'}...</span>
+                      <span>Validating against BIRS Gateway...</span>
                     </>
                   ) : (
                     <>
                       <CheckCircle2 className="w-4 h-4" />
-                      <span>Verify NIN ({isDemoMode ? 'Sandbox' : 'Live Gateway'})</span>
+                      <span>Verify NIN ({isDemoMode ? 'Simulated Sandbox' : 'Real Live Gateway'})</span>
                     </>
                   )}
                 </button>
@@ -1621,15 +1688,94 @@ export default function App() {
                         {singleResult.status === 'success' ? 'NIN Verified Successfully' : 'Verification Failed'}
                       </h3>
                     </div>
-                    {singleResult.isCorsFallback && (
+                    {singleResult.isDemoSimulation ? (
                       <span className="text-[10px] bg-amber-500/20 text-amber-300 border border-amber-500/40 px-2 py-0.5 rounded-full font-semibold flex items-center gap-1">
                         <Sparkles className="w-3 h-3 text-amber-400" />
-                        <span>Sandbox Fallback (Browser CORS)</span>
+                        <span>Simulated Sandbox</span>
+                      </span>
+                    ) : (
+                      <span className="text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 px-2 py-0.5 rounded-full font-semibold flex items-center gap-1">
+                        <BadgeCheck className="w-3 h-3 text-emerald-400" />
+                        <span>{singleResult.source || 'Live BIRS Gateway'}</span>
                       </span>
                     )}
                   </div>
 
-                  <p className="text-xs text-slate-300 mb-4">{singleResult.message}</p>
+                  <p className="text-xs text-slate-300 mb-3">{singleResult.message}</p>
+
+                  {/* Browser CORS Block Action Hub */}
+                  {singleResult.isCorsBlocked && (
+                    <div className="mt-3 p-4 bg-amber-950/40 border border-amber-500/40 rounded-xl space-y-3">
+                      <div className="flex items-start gap-2.5">
+                        <ShieldAlert className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+                        <div>
+                          <h4 className="text-xs font-bold text-amber-300">Browser CORS Restriction on Static Hosting</h4>
+                          <p className="text-[11px] text-slate-300 mt-1 leading-relaxed">
+                            Your browser blocked direct connection from this static webpage to the Nigerian BIRS identity gateway (<code>service-gateway.bsg.com.ng</code>). <strong>No fake data was generated.</strong> To run 100% genuine verification:
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1">
+                        <button
+                          type="button"
+                          onClick={() => downloadExtensionZip()}
+                          className="p-2.5 bg-emerald-600/30 hover:bg-emerald-600/50 border border-emerald-500/40 text-emerald-300 rounded-lg text-left text-xs transition-all flex flex-col justify-between cursor-pointer"
+                        >
+                          <span className="font-semibold flex items-center gap-1">
+                            <Puzzle className="w-3.5 h-3.5" /> Chrome Extension
+                          </span>
+                          <span className="text-[10px] text-emerald-400/80 mt-1">Bypasses browser CORS natively.</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => downloadPythonBotScript()}
+                          className="p-2.5 bg-blue-600/30 hover:bg-blue-600/50 border border-blue-500/40 text-blue-300 rounded-lg text-left text-xs transition-all flex flex-col justify-between cursor-pointer"
+                        >
+                          <span className="font-semibold flex items-center gap-1">
+                            <FileCode className="w-3.5 h-3.5" /> Desktop Python Bot
+                          </span>
+                          <span className="text-[10px] text-blue-400/80 mt-1">Direct terminal socket access.</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setActiveTab('settings')}
+                          className="p-2.5 bg-purple-600/30 hover:bg-purple-600/50 border border-purple-500/40 text-purple-300 rounded-lg text-left text-xs transition-all flex flex-col justify-between cursor-pointer"
+                        >
+                          <span className="font-semibold flex items-center gap-1">
+                            <Server className="w-3.5 h-3.5" /> Set Relay Proxy
+                          </span>
+                          <span className="text-[10px] text-purple-400/80 mt-1">Configure backend URL in Settings.</span>
+                        </button>
+                      </div>
+
+                      {/* Inline Quick Proxy Config */}
+                      <div className="pt-2 border-t border-amber-500/20 flex items-center gap-2">
+                        <input
+                          type="text"
+                          placeholder="Relay Proxy URL (e.g. http://localhost:3000 or Vercel URL)..."
+                          value={proxyUrl}
+                          onChange={(e) => {
+                            setProxyUrl(e.target.value);
+                            localStorage.setItem('birs_proxy_url', e.target.value);
+                          }}
+                          className="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-[11px] font-mono text-slate-200 focus:outline-none focus:border-amber-400"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            showToast('Relay proxy URL saved! Retrying verification...', 'info');
+                            handleVerifySingle(new Event('submit') as any);
+                          }}
+                          className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded-lg text-xs font-semibold whitespace-nowrap cursor-pointer"
+                        >
+                          Save &amp; Retry
+                        </button>
+                      </div>
+                    </div>
+                  )}
 
                   {singleResult.details && Object.keys(singleResult.details).length > 0 && (
                     <div className="space-y-2 bg-slate-950/80 p-3.5 rounded-lg border border-slate-800/80 text-xs">
@@ -1847,16 +1993,95 @@ export default function App() {
                 </div>
 
                 <div>
-                  <label className="block text-slate-300 font-medium mb-1.5 flex items-center gap-1.5">
-                    <Server className="w-3.5 h-3.5 text-blue-400" />
-                    <span>Gateway Validation Endpoint:</span>
-                  </label>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-slate-300 font-medium flex items-center gap-1.5">
+                      <Server className="w-3.5 h-3.5 text-blue-400" />
+                      <span>Gateway Validation Endpoint:</span>
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => setGatewayUrl(DEFAULT_GATEWAY_URL)}
+                      className="text-[10px] text-emerald-400 hover:text-emerald-300 underline cursor-pointer"
+                    >
+                      Reset to Official BIRS Gateway
+                    </button>
+                  </div>
                   <input
                     type="text"
-                    disabled
-                    value="https://service-gateway.bsg.com.ng/api/user-module/api/nin/validate"
-                    className="w-full bg-slate-950/70 border border-slate-800/80 rounded-xl px-3.5 py-2.5 font-mono text-slate-400 cursor-not-allowed"
+                    value={gatewayUrl}
+                    onChange={(e) => setGatewayUrl(e.target.value)}
+                    placeholder={DEFAULT_GATEWAY_URL}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 font-mono text-slate-200 focus:outline-none focus:border-emerald-500"
                   />
+                  <p className="text-[11px] text-slate-500 mt-1">
+                    Official gateway: <code className="text-slate-400 font-mono">{DEFAULT_GATEWAY_URL}</code>
+                  </p>
+                </div>
+
+                {/* Relay Proxy URL Configuration for GitHub Pages / CORS Bypass */}
+                <div className="pt-2 border-t border-slate-800">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-slate-300 font-medium flex items-center gap-1.5">
+                      <Globe className="w-3.5 h-3.5 text-purple-400" />
+                      <span>Relay Proxy / Backend URL (for GitHub Pages CORS Bypass):</span>
+                    </label>
+                    {proxyUrl && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setProxyUrl('');
+                          localStorage.removeItem('birs_proxy_url');
+                          showToast('Cleared relay proxy. Using direct gateway.', 'info');
+                        }}
+                        className="text-[10px] text-red-400 hover:text-red-300 underline cursor-pointer"
+                      >
+                        Clear Proxy
+                      </button>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={proxyUrl}
+                      onChange={(e) => {
+                        setProxyUrl(e.target.value);
+                        localStorage.setItem('birs_proxy_url', e.target.value);
+                      }}
+                      placeholder="e.g. http://localhost:3000 or https://your-project.vercel.app"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 font-mono text-slate-200 focus:outline-none focus:border-purple-500"
+                    />
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        if (!proxyUrl) {
+                          showToast('Please enter a proxy URL first', 'error');
+                          return;
+                        }
+                        showToast('Testing proxy connection...', 'info');
+                        try {
+                          const testUrl = proxyUrl.endsWith('/api/verify') ? proxyUrl : `${proxyUrl.replace(/\/$/, '')}/api/verify`;
+                          const res = await fetch(testUrl, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ nin: '12345678901', merchantKey }),
+                          });
+                          if (res.ok || res.status === 400 || res.status === 404 || res.status === 500) {
+                            showToast('✓ Proxy connection successful! Real gateway reachable.', 'success');
+                          } else {
+                            showToast(`Proxy returned HTTP ${res.status}`, 'error');
+                          }
+                        } catch (err: any) {
+                          showToast(`Proxy unreachable: ${err?.message || 'Connection failed'}`, 'error');
+                        }
+                      }}
+                      className="px-3 py-2.5 bg-purple-600 hover:bg-purple-500 text-white rounded-xl text-xs font-semibold whitespace-nowrap cursor-pointer transition-all shadow"
+                    >
+                      Test Connection
+                    </button>
+                  </div>
+                  <p className="text-[11px] text-slate-500 mt-1 leading-relaxed">
+                    When hosted on static GitHub Pages, enter any backend URL (e.g. <code>http://localhost:3000</code> or your free Vercel deployment) to forward verification requests server-to-server with zero browser CORS blocking.
+                  </p>
                 </div>
 
                 <div className="grid grid-cols-2 gap-4 pt-2">
@@ -1892,7 +2117,10 @@ export default function App() {
               <div className="pt-4 border-t border-slate-800 flex justify-end">
                 <button
                   type="button"
-                  onClick={() => showToast('Settings updated successfully and will apply to subsequent bot jobs.', 'success')}
+                  onClick={() => {
+                    localStorage.setItem('birs_proxy_url', proxyUrl);
+                    showToast('Settings & Relay Proxy saved! Configuration will apply to all verifications.', 'success');
+                  }}
                   className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-semibold shadow cursor-pointer transition-all"
                 >
                   Save Configuration
