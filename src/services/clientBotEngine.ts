@@ -631,202 +631,6 @@ export function exportResultsInBrowser(
   }
 }
 
-// Client-Side Standalone Python Bot Script Generator
-export function downloadPythonBotScript() {
-  const pythonScript = `#!/usr/bin/env python3
-"""
-BIRS Autonomous NIN Bulk Verification Bot (Standalone Engine)
-Direct gateway access - runs locally with 100% genuine validation and zero browser CORS limits.
-"""
-
-import sys
-import time
-import argparse
-import requests
-import openpyxl
-from openpyxl import Workbook
-
-DEFAULT_GATEWAY = "https://service-gateway.bsg.com.ng/api/user-module/api/nin/validate"
-DEFAULT_KEY = "e6385c73adba4eb6807c0ec858fd8f5c"
-
-def verify_nin(nin, merchant_key=DEFAULT_KEY, gateway=DEFAULT_GATEWAY, timeout=25):
-    headers = {
-        "Content-Type": "application/json",
-        "X-MERCHANT-KEY": merchant_key,
-        "User-Agent": "Mozilla/5.0 BIRSBot/2.2",
-        "Origin": "https://birs.be.gov.ng",
-        "Referer": "https://birs.be.gov.ng/",
-    }
-    try:
-        resp = requests.post(gateway, json={"nin": str(nin).strip()}, headers=headers, timeout=timeout)
-        try:
-            data = resp.json()
-        except Exception:
-            data = {}
-        if resp.status_code == 200 and data:
-            return True, "Verified successfully", data
-        error_msg = data.get("message") or data.get("error") or f"HTTP {resp.status_code}"
-        return False, error_msg, data
-    except Exception as e:
-        return False, f"Network error: {str(e)}", {}
-
-def main():
-    parser = argparse.ArgumentParser(description="BIRS NIN Bulk Verification Bot")
-    parser.add_argument("--input", "-i", required=True, help="Path to input XLSX or TXT file containing NINs")
-    parser.add_argument("--output", "-o", default="birs_verified_results.xlsx", help="Output XLSX file path")
-    parser.add_argument("--delay", "-d", type=float, default=1.5, help="Delay between requests in seconds")
-    parser.add_argument("--key", "-k", default=DEFAULT_KEY, help="BIRS Merchant Key")
-    args = parser.parse_args()
-
-    nins = []
-    if args.input.endswith((".xlsx", ".xls")):
-        wb_in = openpyxl.load_workbook(args.input, data_only=True)
-        sheet = wb_in.active
-        for row in sheet.iter_rows(values_only=True):
-            for cell in row:
-                s = str(cell or "").strip()
-                if len(s) == 11 and s.isdigit():
-                    nins.append(s)
-    else:
-        with open(args.input, "r") as f:
-            for line in f:
-                s = line.strip()
-                if len(s) == 11 and s.isdigit():
-                    nins.append(s)
-
-    nins = sorted(list(set(nins)))
-    print(f"[*] Loaded {len(nins)} unique 11-digit NINs to verify against BIRS Gateway.")
-
-    wb_out = Workbook()
-    ws_success = wb_out.active
-    ws_success.title = "Verified Taxpayers"
-    ws_all = wb_out.create_sheet(title="All Results")
-    ws_all.append(["NIN", "Status", "Message"])
-
-    successes = []
-    for idx, nin in enumerate(nins, 1):
-        print(f"[{idx}/{len(nins)}] Verifying {nin}... ", end="", flush=True)
-        ok, msg, data = verify_nin(nin, merchant_key=args.key)
-        if ok:
-            name = f"{data.get('firstName', '')} {data.get('surname', '')}".strip()
-            print(f"SUCCESS: {name or 'OK'}")
-            row = {"NIN": nin, **data}
-            successes.append(row)
-            ws_all.append([nin, "SUCCESS", msg])
-        else:
-            print(f"FAILED ({msg})")
-            ws_all.append([nin, "FAILED", msg])
-        if idx < len(nins):
-            time.sleep(args.delay)
-
-    if successes:
-        headers = list(successes[0].keys())
-        ws_success.append(headers)
-        for s in successes:
-            ws_success.append([str(s.get(h, "")) for h in headers])
-    else:
-        ws_success.append(["NIN", "Status"])
-        ws_success.append(["None", "No successful verifications"])
-
-    wb_out.save(args.output)
-    print(f"[+] All done! Results saved to {args.output}")
-
-if __name__ == "__main__":
-    main()
-`;
-  downloadBlob(pythonScript, 'birs_bot.py', 'text/x-python');
-}
-
-// Client-Side Standalone Node.js Bot Downloader
-export function downloadNodeBotScript() {
-  const nodeScript = `// BIRS Autonomous NIN Bulk Verification Bot (Node.js Standalone)
-import fs from 'fs';
-import * as XLSX from 'xlsx';
-
-const DEFAULT_GATEWAY = 'https://service-gateway.bsg.com.ng/api/user-module/api/nin/validate';
-const DEFAULT_KEY = 'e6385c73adba4eb6807c0ec858fd8f5c';
-
-const inputFile = process.argv[2] || 'nins.xlsx';
-const outputFile = process.argv[3] || 'birs_verified.xlsx';
-const delay = Number(process.argv[4]) || 1500;
-
-if (!fs.existsSync(inputFile)) {
-  console.error('[!] Input file not found:', inputFile);
-  console.log('Usage: node birs_nin_bot.mjs <input.xlsx/txt> [output.xlsx] [delayMs]');
-  process.exit(1);
-}
-
-let nins = [];
-if (inputFile.endsWith('.xlsx') || inputFile.endsWith('.xls') || inputFile.endsWith('.csv')) {
-  const wb = XLSX.readFile(inputFile);
-  const sheet = wb.Sheets[wb.SheetNames[0]];
-  const data = XLSX.utils.sheet_to_json(sheet, { header: 1 });
-  for (const row of data) {
-    if (Array.isArray(row)) {
-      for (const cell of row) {
-        const str = String(cell || '').trim();
-        if (/^\\d{11}$/.test(str)) nins.push(str);
-      }
-    }
-  }
-} else {
-  const text = fs.readFileSync(inputFile, 'utf-8');
-  nins = text.match(/\\b\\d{11}\\b/g) || [];
-}
-
-nins = [...new Set(nins)];
-console.log(\`[*] Loaded \${nins.length} unique NINs to verify.\`);
-
-async function verify(nin) {
-  try {
-    const res = await fetch(DEFAULT_GATEWAY, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-MERCHANT-KEY': DEFAULT_KEY,
-        'User-Agent': 'Mozilla/5.0 BIRSBot/2.2',
-        'Origin': 'https://birs.be.gov.ng',
-        'Referer': 'https://birs.be.gov.ng/',
-      },
-      body: JSON.stringify({ nin }),
-    });
-    const json = await res.json().catch(() => ({}));
-    if (res.ok) {
-      return { ok: true, data: json };
-    }
-    return { ok: false, message: json.message || json.error || \`HTTP \${res.status}\` };
-  } catch (e) {
-    return { ok: false, message: e.message };
-  }
-}
-
-const successes = [];
-const all = [];
-
-for (let i = 0; i < nins.length; i++) {
-  const nin = nins[i];
-  process.stdout.write(\`[\${i + 1}/\${nins.length}] \${nin}... \`);
-  const res = await verify(nin);
-  if (res.ok) {
-    console.log(\`SUCCESS (\${res.data.firstName || ''} \${res.data.surname || ''})\`);
-    successes.push({ NIN: nin, ...res.data });
-    all.push({ NIN: nin, Status: 'SUCCESS', Message: 'Verified' });
-  } else {
-    console.log(\`FAILED (\${res.message})\`);
-    all.push({ NIN: nin, Status: 'FAILED', Message: res.message });
-  }
-  if (i < nins.length - 1) await new Promise((r) => setTimeout(r, delay));
-}
-
-const outWb = XLSX.utils.book_new();
-XLSX.utils.book_append_sheet(outWb, XLSX.utils.json_to_sheet(successes.length ? successes : [{ NIN: 'None' }]), 'Verified');
-XLSX.utils.book_append_sheet(outWb, XLSX.utils.json_to_sheet(all), 'All');
-XLSX.writeFile(outWb, outputFile);
-console.log('[+] Done! Results written to', outputFile);
-`;
-  downloadBlob(nodeScript, 'birs_nin_bot.mjs', 'text/javascript');
-}
-
 // Client-Side Full Manifest V3 Chrome Extension Downloader
 export async function downloadExtensionZip() {
   const zip = new JSZip();
@@ -1252,6 +1056,20 @@ export async function testProxyConnection(
       };
     }
 
+    const isLocalhost = cleanUrl.includes('localhost') || cleanUrl.includes('127.0.0.1');
+    const isHttpsOrigin = typeof window !== 'undefined' && window.location.protocol === 'https:';
+
+    if (!res && isLocalhost) {
+      return {
+        ok: false,
+        latencyMs,
+        message: isHttpsOrigin
+          ? `Could not connect to ${cleanUrl} (${latencyMs}ms). Why? (1) You do not have a local server currently running on port 3000 on your PC (run "npm start" or "node proxies/nodejs/server.js" to start it). (2) You are viewing this page over HTTPS (${window.location.origin}), and web browsers block insecure HTTP requests to localhost due to Mixed Content security. To proxy from HTTPS, deploy to Render.com (free HTTPS) or switch to the 1-Click Chrome Extension tab!`
+          : `Could not connect to ${cleanUrl} (${latencyMs}ms). Make sure your local server is running by opening a terminal and running "npm start" or "node proxies/nodejs/server.js" on port 3000.`,
+        endpointTested: endpointUsed,
+      };
+    }
+
     return {
       ok: false,
       latencyMs,
@@ -1262,6 +1080,20 @@ export async function testProxyConnection(
     };
   } catch (err: any) {
     const latencyMs = Math.round(performance.now() - start);
+    const isLocalhost = cleanUrl.includes('localhost') || cleanUrl.includes('127.0.0.1');
+    const isHttpsOrigin = typeof window !== 'undefined' && window.location.protocol === 'https:';
+
+    if (isLocalhost) {
+      return {
+        ok: false,
+        latencyMs,
+        message: isHttpsOrigin
+          ? `Could not connect to ${cleanUrl} (${latencyMs}ms). (1) Ensure your local server is running on port 3000 ("npm start"). (2) Web browsers block HTTP localhost requests when viewing HTTPS pages (${window.location.origin}) due to Mixed Content. Deploy to Render.com (free HTTPS) or use the 1-Click Chrome Extension tab!`
+          : `Could not connect to ${cleanUrl} (${latencyMs}ms). Start your server with "npm start" on port 3000.`,
+        endpointTested: cleanUrl,
+      };
+    }
+
     return {
       ok: false,
       latencyMs,
@@ -1271,252 +1103,4 @@ export async function testProxyConnection(
   }
 }
 
-// Client-Side Standalone Node.js Proxy Script Downloader
-export function downloadNodeProxyScript() {
-  const code = `/**
- * Standalone Node.js Express Proxy for BIRS NIN Gateway
- * Deploy on Render (Free), Railway, Replit, or run locally:
- * 
- * 1. npm init -y
- * 2. npm install express cors
- * 3. node server.js
- */
 
-import express from 'express';
-import cors from 'cors';
-
-const app = express();
-const PORT = process.env.PORT || 3000;
-const DEFAULT_GATEWAY = 'https://service-gateway.bsg.com.ng/api/user-module/api/nin/validate';
-const DEFAULT_KEY = 'e6385c73adba4eb6807c0ec858fd8f5c';
-
-app.use(cors({ origin: '*', methods: ['GET', 'POST', 'OPTIONS'], allowedHeaders: ['Content-Type', 'X-MERCHANT-KEY', 'Authorization'] }));
-app.use(express.json());
-
-app.get('/', (_req, res) => {
-  res.json({ status: 'ok', service: 'BIRS Node.js Proxy', message: 'Ready for GitHub Pages requests' });
-});
-
-app.get('/api/health', (_req, res) => {
-  res.json({ status: 'ok', time: new Date().toISOString() });
-});
-
-app.post(['/api/verify', '/api/validate', '/api/proxy'], async (req, res) => {
-  const { nin, merchantKey, gatewayUrl } = req.body || {};
-  const cleanedNin = String(nin || '').replace(/\\D/g, '');
-
-  if (cleanedNin.length !== 11) {
-    return res.status(400).json({ status: 'failed', message: 'NIN must be 11 digits', details: {} });
-  }
-
-  const targetUrl = gatewayUrl || DEFAULT_GATEWAY;
-  const key = (merchantKey || DEFAULT_KEY).trim();
-
-  try {
-    const birsRes = await fetch(targetUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-MERCHANT-KEY': key,
-        'Origin': 'https://birs.be.gov.ng',
-        'Referer': 'https://birs.be.gov.ng/',
-        'User-Agent': 'Mozilla/5.0 BIRSProxy/3.0',
-      },
-      body: JSON.stringify({ nin: cleanedNin }),
-    });
-
-    const data = await birsRes.json().catch(() => ({}));
-    if (birsRes.ok) {
-      return res.status(200).json({
-        status: 'success',
-        ok: true,
-        message: 'Verified successfully via Live BIRS Gateway',
-        details: data,
-        data: data,
-      });
-    }
-
-    return res.status(birsRes.status).json({
-      status: 'failed',
-      ok: false,
-      message: data.message || 'Verification failed on BIRS gateway',
-      details: data,
-    });
-  } catch (err) {
-    return res.status(500).json({ status: 'failed', message: err.message, details: {} });
-  }
-});
-
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(\`[BIRS Proxy] listening on http://0.0.0.0:\${PORT}\`);
-});
-`;
-  downloadBlob(code, 'birs_node_proxy.js', 'text/javascript');
-}
-
-// Client-Side Standalone Python Proxy Script Downloader
-export function downloadPythonProxyScript() {
-  const code = `"""
-BIRS NIN Gateway - Python FastAPI Server-Side Proxy
-Deploy on Render (Free), AWS, Railway, or run locally:
-pip install fastapi uvicorn httpx
-python app.py
-"""
-
-from fastapi import FastAPI, Request, Response
-from fastapi.middleware.cors import CORSMiddleware
-import httpx
-import uvicorn
-import re
-import os
-
-app = FastAPI(title="BIRS NIN Proxy")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-DEFAULT_GATEWAY = "https://service-gateway.bsg.com.ng/api/user-module/api/nin/validate"
-DEFAULT_KEY = "e6385c73adba4eb6807c0ec858fd8f5c"
-
-@app.get("/")
-@app.get("/api/health")
-async def health():
-    return {"status": "ok", "service": "BIRS Python Proxy"}
-
-@app.post("/api/verify")
-@app.post("/api/validate")
-@app.post("/api/proxy")
-async def verify(request: Request):
-    body = await request.json()
-    nin = re.sub(r"\\D", "", str(body.get("nin", "")))
-    if len(nin) != 11:
-        return Response(content='{"status":"failed","message":"NIN must be 11 digits"}', status_code=400, media_type="application/json")
-    
-    key = str(body.get("merchantKey") or DEFAULT_KEY).strip()
-    url = str(body.get("gatewayUrl") or DEFAULT_GATEWAY)
-
-    headers = {
-        "Content-Type": "application/json",
-        "X-MERCHANT-KEY": key,
-        "Origin": "https://birs.be.gov.ng",
-        "Referer": "https://birs.be.gov.ng/",
-        "User-Agent": "Mozilla/5.0 BIRSProxy-Python/1.0"
-    }
-
-    try:
-        async with httpx.AsyncClient(timeout=25.0) as client:
-            resp = await client.post(url, headers=headers, json={"nin": nin})
-            data = resp.json() if resp.status_code == 200 else {}
-            if resp.status_code == 200:
-                return {"status": "success", "ok": True, "details": data, "data": data}
-            return Response(content=resp.text, status_code=resp.status_code, media_type="application/json")
-    except Exception as e:
-        return Response(content=f'{{"status":"failed","message":"{str(e)}"}}', status_code=500, media_type="application/json")
-
-if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
-`;
-  downloadBlob(code, 'birs_python_proxy.py', 'text/x-python');
-}
-
-// Client-Side Standalone Go Proxy Script Downloader
-export function downloadGoProxyScript() {
-  const code = `package main
-
-import (
-	"bytes"
-	"encoding/json"
-	"fmt"
-	"io"
-	"log"
-	"net/http"
-	"os"
-	"regexp"
-	"time"
-)
-
-const (
-	defaultGateway = "https://service-gateway.bsg.com.ng/api/user-module/api/nin/validate"
-	defaultKey     = "e6385c73adba4eb6807c0ec858fd8f5c"
-)
-
-func enableCORS(w http.ResponseWriter) {
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-MERCHANT-KEY, Authorization")
-}
-
-func main() {
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
-	}
-
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		enableCORS(w)
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(\`{"status":"ok","service":"BIRS Go Proxy"}\`))
-	})
-
-	http.HandleFunc("/api/verify", func(w http.ResponseWriter, r *http.Request) {
-		enableCORS(w)
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		if r.Method != http.MethodPost {
-			http.Error(w, \`{"error":"Method not allowed"}\`, http.StatusMethodNotAllowed)
-			return
-		}
-
-		var reqData struct {
-			NIN         string \`json:"nin"\`
-			MerchantKey string \`json:"merchantKey"\`
-		}
-		bodyBytes, _ := io.ReadAll(r.Body)
-		_ = json.Unmarshal(bodyBytes, &reqData)
-
-		cleaned := regexp.MustCompile(\`\\D\`).ReplaceAllString(reqData.NIN, "")
-		if len(cleaned) != 11 {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusBadRequest)
-			w.Write([]byte(\`{"status":"failed","message":"NIN must be 11 digits"}\`))
-			return
-		}
-
-		key := reqData.MerchantKey
-		if key == "" {
-			key = defaultKey
-		}
-
-		payload, _ := json.Marshal(map[string]string{"nin": cleaned})
-		client := &http.Client{Timeout: 25 * time.Second}
-		bReq, _ := http.NewRequest(http.MethodPost, defaultGateway, bytes.NewBuffer(payload))
-		bReq.Header.Set("Content-Type", "application/json")
-		bReq.Header.Set("X-MERCHANT-KEY", key)
-		bReq.Header.Set("Origin", "https://birs.be.gov.ng")
-		bReq.Header.Set("Referer", "https://birs.be.gov.ng/")
-
-		resp, err := client.Do(bReq)
-		if err != nil {
-			http.Error(w, fmt.Sprintf(\`{"status":"failed","message":"%s"}\`, err.Error()), http.StatusGatewayTimeout)
-			return
-		}
-		defer resp.Body.Close()
-
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(resp.StatusCode)
-		io.Copy(w, resp.Body)
-	})
-
-	log.Printf("[BIRS Go Proxy] listening on :%s", port)
-	http.ListenAndServe(":"+port, nil)
-}
-`;
-  downloadBlob(code, 'birs_go_proxy.go', 'text/x-go');
-}

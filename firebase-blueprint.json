@@ -1,0 +1,74 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "User Profile",
+      "description": "Authenticated user profile associated with Firebase Auth",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "displayName": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "lastLoginAt": { "type": "string" }
+      },
+      "required": ["id", "email"]
+    },
+    "VerificationBatch": {
+      "title": "Verification Batch",
+      "description": "Bulk verification work done and saved by the user",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "name": { "type": "string" },
+        "totalNins": { "type": "number" },
+        "successCount": { "type": "number" },
+        "failedCount": { "type": "number" },
+        "status": { "type": "string", "enum": ["completed", "running", "paused", "stopped"] },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "userId", "name", "totalNins", "successCount", "failedCount", "status", "createdAt"]
+    },
+    "TaxpayerRecord": {
+      "title": "Taxpayer Record",
+      "description": "Verified taxpayer details linked to the user account",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "nin": { "type": "string" },
+        "fullName": { "type": "string" },
+        "firstName": { "type": "string" },
+        "surname": { "type": "string" },
+        "middleName": { "type": "string" },
+        "state": { "type": "string" },
+        "lga": { "type": "string" },
+        "phone": { "type": "string" },
+        "dob": { "type": "string" },
+        "gender": { "type": "string" },
+        "tin": { "type": "string" },
+        "trackingId": { "type": "string" },
+        "address": { "type": "string" },
+        "status": { "type": "string" },
+        "verifiedAt": { "type": "string" }
+      },
+      "required": ["id", "userId", "nin", "status", "verifiedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "Stores individual user identity and login timestamps"
+    },
+    "/users/{userId}/batches/{batchId}": {
+      "schema": "VerificationBatch",
+      "description": "Stores user verification batches and job progress so users can resume work"
+    },
+    "/users/{userId}/taxpayers/{taxpayerId}": {
+      "schema": "TaxpayerRecord",
+      "description": "Stores taxpayer verification history and credentials for the user"
+    }
+  }
+}

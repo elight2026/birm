@@ -1,0 +1,5 @@
+# BIRS Autonomous Bulk NIN Input File
+# Paste your 11-digit NINs below (one per line, without spaces or hyphens)
+# Example:
+# 12345678901
+# 50071590476

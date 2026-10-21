@@ -10,8 +10,20 @@ import { DEFAULT_GATEWAY_URL } from './src/types';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+function getPort(): number {
+  const portArgIdx = process.argv.indexOf('--port');
+  if (portArgIdx !== -1 && process.argv[portArgIdx + 1]) {
+    return Number(process.argv[portArgIdx + 1]) || 3000;
+  }
+  // Environment constraint: Dev server must run on port 3000
+  if (process.env.NODE_ENV !== 'production') {
+    return 3000;
+  }
+  return Number(process.env.PORT) || 3000;
+}
+
+const PORT = getPort();
 const app = express();
-const PORT = Number(process.env.PORT) || 3000;
 
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
@@ -231,21 +243,10 @@ async function startServer() {
     });
     app.use(vite.middlewares);
     app.get('*', async (req: Request, res: Response, next) => {
-      const url = req.originalUrl;
       try {
+        const url = req.originalUrl;
         let template = fs.readFileSync(path.resolve(__dirname, 'index.html'), 'utf-8');
         template = await vite.transformIndexHtml(url, template);
-        const reactRefreshPreamble = `
-    <script type="module">
-      import RefreshRuntime from "/@react-refresh";
-      RefreshRuntime.injectIntoGlobalHook(window);
-      window.$RefreshReg$ = () => {};
-      window.$RefreshSig$ = () => (type) => type;
-      window.__vite_plugin_react_preamble_installed__ = true;
-    </script>`;
-        if (!template.includes('__vite_plugin_react_preamble_installed__')) {
-          template = template.replace('<head>', `<head>${reactRefreshPreamble}`);
-        }
         res.status(200).set({ 'Content-Type': 'text/html' }).end(template);
       } catch (e: any) {
         next(e);

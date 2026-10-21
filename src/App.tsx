@@ -1,12 +1,17 @@
 /**
- * @license
- * SPDX-License-Identifier: Apache-2.0
+ * BIRS NIN Autonomous Verifier & Bulk Export Bot
+ * 
+ * Includes:
+ * 1. User Authentication (Google Auth via Firebase) & Cloud Sync
+ * 2. Cross-Device History: See previous batches & resume work from any device
+ * 3. Instant Single NIN Lookup (direct gateway validation & taxpayer card export)
+ * 4. Autonomous Bulk Bot (bulk queue, live progress, and 1-Click Excel export)
+ * 5. Background Autobot & zero-CORS Chrome Extension support
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import * as XLSX from 'xlsx';
 import {
-  Bot,
   Play,
   Pause,
   Square,
@@ -15,2650 +20,1847 @@ import {
   Upload,
   CheckCircle2,
   XCircle,
-  AlertCircle,
   Search,
-  RefreshCw,
   FileSpreadsheet,
-  Terminal,
+  Terminal as TerminalIcon,
   Settings,
   Copy,
   Check,
   Eye,
   ShieldCheck,
-  Zap,
   Clock,
-  Layers,
-  FileText,
-  Code2,
-  ExternalLink,
-  ChevronDown,
-  Sparkles,
-  Globe,
-  Cpu,
-  Server,
-  HelpCircle,
   X,
-  CheckCircle,
-  Info,
-  SlidersHorizontal,
-  History,
-  ListFilter,
-  UploadCloud,
-  Cloud,
-  FileDown,
-  Fingerprint,
-  Building2,
-  Phone,
-  Calendar,
-  MapPin,
-  Hash,
-  Table as TableIcon,
-  MessageSquare,
-  FileCode,
-  ShieldAlert,
-  UserCheck,
-  KeyRound,
-  Activity,
-  Gauge,
-  Timer,
-  Filter,
-  Database,
-  Radio,
   Puzzle,
-  TrendingUp,
-  BadgeCheck
+  Globe,
+  Radio,
+  Sparkles,
+  Info,
+  UserCheck,
+  BadgeCheck,
+  ArrowRight,
+  RefreshCw,
+  PlusCircle,
+  Cloud,
+  CloudCheck,
+  CloudUpload,
+  History,
+  LogIn,
+  LogOut,
+  Trash2,
+  User as UserIcon,
+  FolderOpen
 } from 'lucide-react';
 import type {
   VerificationResult,
-  BotLog,
   BotJob,
   BotJobSettings,
-  BotJobStats,
-  TaxpayerDetails,
-  SingleLookupResult,
-  EngineMode,
-  ActiveTab,
-  ResultFilter,
-  LogFilter,
-  ExportFormat,
-  ExportFilter,
   ToastNotification
 } from './types';
 import {
   ClientBotManager,
   exportResultsInBrowser,
-  downloadPythonBotScript,
-  downloadNodeBotScript,
   downloadExtensionZip,
   verifyNinInBrowser,
   DEFAULT_GATEWAY_URL,
   DEFAULT_MERCHANT_KEY,
-  BIRS_DIRECT_PORTAL_URL,
-  testProxyConnection,
-  downloadNodeProxyScript,
-  downloadPythonProxyScript,
-  downloadGoProxyScript
+  testProxyConnection
 } from './services/clientBotEngine';
+import {
+  auth,
+  loginWithGoogle,
+  logoutUser,
+  onAuthStateChanged,
+  saveBatchToCloud,
+  fetchUserBatchesFromCloud,
+  saveTaxpayerToCloud,
+  fetchUserTaxpayersFromCloud,
+  deleteBatchFromCloud,
+  type User
+} from './services/firebase';
 
-export default function App() {
-  const [activeTab, setActiveTab] = useState<ActiveTab>('bot');
-  
-  // Toast Notification State
+export function App() {
+  // Navigation: 'bulk' | 'single'
+  const [activeTab, setActiveTab] = useState<'bulk' | 'single'>('bulk');
+
+  // User Authentication & Cloud Sync
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [isAuthLoading, setIsAuthLoading] = useState(true);
+  const [showCloudHistoryModal, setShowCloudHistoryModal] = useState(false);
+  const [cloudBatches, setCloudBatches] = useState<any[]>([]);
+  const [cloudTaxpayers, setCloudTaxpayers] = useState<any[]>([]);
+  const [isSyncingCloud, setIsSyncingCloud] = useState(false);
+
+  // Bulk Input & Execution State
+  const [inputText, setInputText] = useState('');
+  const [activeJob, setActiveJob] = useState<BotJob | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'success' | 'failed'>('all');
+
+  // Single NIN Lookup State
+  const [singleNin, setSingleNin] = useState('');
+  const [isVerifyingSingle, setIsVerifyingSingle] = useState(false);
+  const [singleResult, setSingleResult] = useState<{
+    nin: string;
+    ok: boolean;
+    status: 'success' | 'failed';
+    message: string;
+    data: Record<string, any>;
+    durationMs: number;
+    timestamp: string;
+    source?: string;
+  } | null>(null);
+  const [recentLookups, setRecentLookups] = useState<Array<{
+    nin: string;
+    ok: boolean;
+    name: string;
+    state: string;
+    lga: string;
+    timestamp: string;
+    data: Record<string, any>;
+  }>>(() => {
+    const saved = localStorage.getItem('birs_recent_single_lookups');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch {
+        // fallback
+      }
+    }
+    return [];
+  });
+
+  // Configuration Settings
+  const [settings, setSettings] = useState<BotJobSettings>(() => {
+    const saved = localStorage.getItem('birs_bot_settings');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch {
+        // fallback
+      }
+    }
+    return {
+      delayMs: 1200,
+      jitterMs: 150,
+      concurrency: 1,
+      maxRetries: 1,
+      timeoutMs: 25000,
+      merchantKey: DEFAULT_MERCHANT_KEY,
+      gatewayUrl: DEFAULT_GATEWAY_URL,
+      proxyUrl: '/api/verify',
+      autoRetry: true,
+      isDemo: false,
+    };
+  });
+
+  // UI Modals & Drawers
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [selectedResult, setSelectedResult] = useState<VerificationResult | null>(null);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [toast, setToast] = useState<ToastNotification | null>(null);
-  const showToast = (message: string, type: 'info' | 'success' | 'error' = 'info') => {
-    setToast({ message, type });
-    setTimeout(() => {
-      setToast((curr) => (curr?.message === message ? null : curr));
-    }, 4500);
-  };
 
-  // Execution Engine & Server Detection State
-  const [engineMode, setEngineMode] = useState<EngineMode>('server');
-  const [isServerAvailable, setIsServerAvailable] = useState<boolean | null>(null);
-  const [showDeployGuide, setShowDeployGuide] = useState(false);
-  const [showProxyHub, setShowProxyHub] = useState(false);
-  const [showCorsModal, setShowCorsModal] = useState(false);
-  const [proxyTesting, setProxyTesting] = useState(false);
-  const [proxyTestResult, setProxyTestResult] = useState<{
+  // Proxy Connectivity Status
+  const [proxyStatus, setProxyStatus] = useState<{
+    tested: boolean;
     ok: boolean;
     latencyMs: number;
     message: string;
-    endpointTested?: string;
-  } | null>(null);
-  const [proxyTab, setProxyTab] = useState<'connect' | 'extension' | 'render' | 'vercel' | 'python' | 'go' | 'node' | 'aws'>('connect');
-
-  // Bot Batch State
-  const [currentJob, setCurrentJob] = useState<BotJob | null>(null);
-  const currentJobRef = useRef<BotJob | null>(null);
-  currentJobRef.current = currentJob;
-
-  const [jobList, setJobList] = useState<any[]>([]);
-  const [inputNinsText, setInputNinsText] = useState('');
-  const [parsedNins, setParsedNins] = useState<string[]>([]);
-  const [fileName, setFileName] = useState<string | null>(null);
-  const [isUploading, setIsUploading] = useState(false);
-
-  // Engine Mode: Live Gateway (Real Verification - Default) vs Optional Simulated Sandbox
-  const [isDemoMode, setIsDemoMode] = useState(false);
-  const [proxyUrl, setProxyUrl] = useState<string>(() => {
-    if (typeof window !== 'undefined') {
-      return localStorage.getItem('birs_proxy_url') || '';
-    }
-    return '';
+  }>({
+    tested: false,
+    ok: true,
+    latencyMs: 0,
+    message: 'Default server proxy active (/api/verify)',
   });
-  const [gatewayUrl, setGatewayUrl] = useState<string>(DEFAULT_GATEWAY_URL);
-  const [isExtensionConnected, setIsExtensionConnected] = useState(false);
+  const [isTestingProxy, setIsTestingProxy] = useState(false);
 
-  // Bot Settings Controls
-  const [delayMs, setDelayMs] = useState(2000);
-  const [jitterMs, setJitterMs] = useState(300);
-  const [concurrency, setConcurrency] = useState(1);
-  const [autoRetry, setAutoRetry] = useState(true);
-  const [maxRetries, setMaxRetries] = useState(2);
-  const [merchantKey, setMerchantKey] = useState(DEFAULT_MERCHANT_KEY);
+  // Extension Bridge Detection
+  const [extensionDetected, setExtensionDetected] = useState(false);
 
-  // Result inspection
-  const [selectedResult, setSelectedResult] = useState<VerificationResult | null>(null);
-  const [resultFilter, setResultFilter] = useState<'all' | 'success' | 'failed'>('all');
-  const [searchQuery, setSearchQuery] = useState('');
-  const [logFilter, setLogFilter] = useState<'all' | 'error'>('all');
-  const [copiedKey, setCopiedKey] = useState(false);
+  // File Upload Reference
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const logContainerRef = useRef<HTMLDivElement>(null);
 
-  // Client-Side Bot Manager (for standalone / GitHub Pages execution)
-  const clientBotManagerRef = useRef<ClientBotManager | null>(null);
-  if (!clientBotManagerRef.current) {
-    clientBotManagerRef.current = new ClientBotManager((updatedJob) => {
-      setCurrentJob({ ...updatedJob });
-      saveLocalJob(updatedJob);
-    });
-  }
+  // Bot Manager Instance
+  const botManagerRef = useRef<ClientBotManager | null>(null);
 
-  // Local Storage persistence for static hosts (GitHub Pages)
-  const saveLocalJob = (job: BotJob) => {
-    try {
-      const stored = localStorage.getItem('birs_local_jobs');
-      let list: BotJob[] = stored ? JSON.parse(stored) : [];
-      const idx = list.findIndex((j) => j.id === job.id);
-      if (idx >= 0) {
-        list[idx] = job;
+  // Track Firebase Auth State
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      setCurrentUser(user);
+      setIsAuthLoading(false);
+      if (user) {
+        refreshCloudData(user.uid);
       } else {
-        list.unshift(job);
+        setCloudBatches([]);
+        setCloudTaxpayers([]);
       }
-      localStorage.setItem('birs_local_jobs', JSON.stringify(list.slice(0, 30)));
-      setJobList(list);
-    } catch {
-      // ignore
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // Fetch Cloud History
+  const refreshCloudData = async (uid: string) => {
+    setIsSyncingCloud(true);
+    try {
+      const batches = await fetchUserBatchesFromCloud(uid);
+      const taxpayers = await fetchUserTaxpayersFromCloud(uid);
+      if (batches) setCloudBatches(batches);
+      if (taxpayers) setCloudTaxpayers(taxpayers);
+    } catch (err: any) {
+      console.warn('Could not sync cloud data:', err);
+    } finally {
+      setIsSyncingCloud(false);
     }
   };
 
-  const loadLocalJobs = () => {
+  // Save settings on update
+  useEffect(() => {
+    localStorage.setItem('birs_bot_settings', JSON.stringify(settings));
+  }, [settings]);
+
+  // Save recent lookups on update
+  useEffect(() => {
+    localStorage.setItem('birs_recent_single_lookups', JSON.stringify(recentLookups));
+  }, [recentLookups]);
+
+  // Initialize bot manager
+  useEffect(() => {
+    botManagerRef.current = new ClientBotManager((updatedJob) => {
+      setActiveJob({ ...updatedJob });
+      // When batch status finishes or pauses, auto-sync to cloud if user is signed in
+      if (
+        currentUser &&
+        (updatedJob.status === 'completed' || updatedJob.status === 'paused' || updatedJob.status === 'stopped')
+      ) {
+        autoSyncJobToCloud(currentUser.uid, updatedJob);
+      }
+    });
+  }, [currentUser]);
+
+  // Auto-sync batch to cloud
+  const autoSyncJobToCloud = async (uid: string, job: BotJob) => {
     try {
-      const stored = localStorage.getItem('birs_local_jobs');
-      if (stored) {
-        const parsed: BotJob[] = JSON.parse(stored);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          setJobList(parsed);
-          if (!currentJobRef.current) {
-            setCurrentJob(parsed[0]);
-          }
+      await saveBatchToCloud(uid, {
+        id: job.id,
+        name: job.name,
+        totalNins: job.totalNins,
+        successCount: job.stats.success,
+        failedCount: job.stats.failed,
+        status: job.status as any,
+        nins: [...job.queue, ...job.results.map((r) => r.nin)],
+        createdAt: job.createdAt,
+      });
+
+      // Save each verified taxpayer to user's cloud records
+      for (const res of job.results) {
+        if (res.status === 'success') {
+          const fn = res.details?.['First Name'] || res.details?.['firstName'] || '';
+          const sn = res.details?.['Surname'] || res.details?.['surname'] || '';
+          const mn = res.details?.['Middle Name'] || res.details?.['middleName'] || '';
+          const fullName = [fn, mn, sn].filter(Boolean).join(' ') || 'Verified Taxpayer';
+
+          await saveTaxpayerToCloud(uid, {
+            nin: res.nin,
+            fullName,
+            firstName: fn,
+            surname: sn,
+            middleName: mn,
+            state: res.details?.['State of Origin'] || res.details?.['stateOfOrigin'] || '',
+            lga: res.details?.['LGA of Origin'] || res.details?.['lgaOfOrigin'] || '',
+            phone: res.details?.['Mobile'] || res.details?.['phone'] || '',
+            dob: res.details?.['Date of Birth'] || res.details?.['dob'] || '',
+            gender: res.details?.['Gender'] || res.details?.['gender'] || '',
+            tin: res.details?.['Taxpayer ID (TIN)'] || res.details?.['tin'] || '',
+            trackingId: res.details?.['Tracking ID'] || res.details?.['trackingId'] || '',
+            address: res.details?.['Residential Address'] || res.details?.['address'] || '',
+            status: 'verified',
+            verifiedAt: res.verifiedAt,
+            details: res.details,
+          });
         }
       }
-    } catch {
-      // ignore
+      refreshCloudData(uid);
+    } catch (e) {
+      console.warn('Auto cloud sync error:', e);
     }
   };
 
-  // Single NIN Testbench State
-  const [singleNin, setSingleNin] = useState('');
-  const [singleLoading, setSingleLoading] = useState(false);
-  const [singleResult, setSingleResult] = useState<any | null>(null);
-
-  // Terminal scroll ref
-  const terminalEndRef = useRef<HTMLDivElement>(null);
-
-  // Initial and periodic fetch of jobs
+  // Listen for Chrome Extension bridge
   useEffect(() => {
-    fetchJobs();
-    const interval = setInterval(() => {
-      fetchJobs();
-    }, 3500);
-    return () => clearInterval(interval);
+    const checkExt = () => {
+      if ((window as any).__BIRS_EXTENSION_AVAILABLE__) {
+        setExtensionDetected(true);
+      }
+    };
+    checkExt();
+    const handleMsg = (e: MessageEvent) => {
+      if (e.data && e.data.type === 'BIRS_EXTENSION_READY') {
+        setExtensionDetected(true);
+      }
+    };
+    window.addEventListener('message', handleMsg);
+    return () => window.removeEventListener('message', handleMsg);
   }, []);
 
-  // Detect Chrome Extension Bridge
+  // Auto scroll logs
   useEffect(() => {
-    if (typeof window !== 'undefined' && (window as any).__BIRS_EXTENSION_AVAILABLE__) {
-      setIsExtensionConnected(true);
+    if (logContainerRef.current) {
+      logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight;
     }
-    const onExtMsg = (e: MessageEvent) => {
-      if (e.data?.type === 'BIRS_EXTENSION_READY') {
-        setIsExtensionConnected(true);
-      }
-    };
-    window.addEventListener('message', onExtMsg);
-    const pollInterval = setInterval(() => {
-      if (typeof window !== 'undefined' && (window as any).__BIRS_EXTENSION_AVAILABLE__) {
-        setIsExtensionConnected(true);
-      }
-    }, 1500);
-    return () => {
-      window.removeEventListener('message', onExtMsg);
-      clearInterval(pollInterval);
-    };
-  }, []);
+  }, [activeJob?.logs]);
 
-  // Real-time SSE connection with polling fallback (active only when server is available)
-  useEffect(() => {
-    if (!currentJob?.id || engineMode !== 'server' || !isServerAvailable) return;
+  // Toast notification helper
+  const showToast = (message: string, type: ToastNotification['type'] = 'info') => {
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 4000);
+  };
 
-    let eventSource: EventSource | null = null;
+  // Handle Google Sign In
+  const handleLogin = async () => {
     try {
-      eventSource = new EventSource(`/api/bot/jobs/${currentJob.id}/stream`);
-
-      eventSource.addEventListener('log', (e) => {
-        try {
-          const log: BotLog = JSON.parse(e.data);
-          setCurrentJob((prev) => {
-            if (!prev || prev.id !== currentJob.id) return prev;
-            const logs = prev.logs || [];
-            const exists = logs.some((l) => l.id === log.id);
-            if (exists) return prev;
-            return { ...prev, logs: [...logs, log] };
-          });
-        } catch {
-          // ignore malformed SSE log
-        }
-      });
-
-      eventSource.addEventListener('result', (e) => {
-        try {
-          const data = JSON.parse(e.data);
-          if (!data?.result) return;
-          setCurrentJob((prev) => {
-            if (!prev || prev.id !== currentJob.id) return prev;
-            const results = prev.results || [];
-            const existingIdx = results.findIndex((r) => r && r.nin === data.result.nin);
-            const newResults = existingIdx >= 0
-              ? results.map((r, i) => (i === existingIdx ? data.result : r))
-              : [...results, data.result];
-            return {
-              ...prev,
-              results: newResults,
-              stats: data.stats || prev.stats,
-              inFlight: [],
-            };
-          });
-        } catch {
-          // ignore malformed SSE result
-        }
-      });
-
-      eventSource.addEventListener('status', (e) => {
-        try {
-          const data = JSON.parse(e.data);
-          setCurrentJob((prev) => {
-            if (!prev || prev.id !== currentJob.id) return prev;
-            return { ...prev, status: data.status, stats: data.stats || prev.stats };
-          });
-        } catch {
-          // ignore malformed SSE status
-        }
-      });
-
-      eventSource.addEventListener('inFlight', (e) => {
-        try {
-          const data = JSON.parse(e.data);
-          setCurrentJob((prev) => (prev ? { ...prev, inFlight: data.inFlight || [] } : prev));
-        } catch {
-          // ignore malformed SSE inFlight
-        }
-      });
-    } catch {
-      // SSE not available, relies on polling below
+      const user = await loginWithGoogle();
+      showToast(`Welcome back, ${user.displayName || user.email}! Cloud history synchronized.`, 'success');
+    } catch (err: any) {
+      showToast(`Sign in error: ${err.message}`, 'error');
     }
+  };
 
-    // High frequency poll while active using currentJobRef to prevent stale closures
-    const pollJob = setInterval(async () => {
-      const active = currentJobRef.current;
-      if (active && (active.status === 'running' || active.status === 'paused')) {
-        try {
-          const res = await fetch(`/api/bot/jobs/${active.id}`);
-          if (res.ok) {
-            const data = await res.json();
-            setCurrentJob(data.job);
-          }
-        } catch {
-          // ignore transient poll failure
-        }
-      }
-    }, 1500);
-
-    return () => {
-      if (eventSource) eventSource.close();
-      clearInterval(pollJob);
-    };
-  }, [currentJob?.id, currentJob?.status, engineMode, isServerAvailable]);
-
-  // Auto-scroll terminal
-  useEffect(() => {
-    if (terminalEndRef.current) {
-      terminalEndRef.current.scrollIntoView({ behavior: 'smooth' });
-    }
-  }, [currentJob?.logs?.length]);
-
-  const fetchJobs = async () => {
+  // Handle Sign Out
+  const handleLogout = async () => {
     try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 2000);
-      const res = await fetch('/api/bot/jobs', { signal: controller.signal });
-      clearTimeout(timeout);
+      await logoutUser();
+      showToast('Signed out. Local offline verification is still available.', 'info');
+    } catch (err: any) {
+      showToast(`Sign out error: ${err.message}`, 'error');
+    }
+  };
+
+  // Copy helper
+  const handleCopy = (text: string, key: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedKey(key);
+    setTimeout(() => setCopiedKey(null), 2000);
+    showToast('Copied to clipboard', 'info');
+  };
+
+  // Extract unique 11-digit NINs from raw text
+  const extractedNins = useMemo(() => {
+    if (!inputText) return [];
+    const matches = inputText.match(/\b\d{11}\b/g) || [];
+    return Array.from(new Set(matches));
+  }, [inputText]);
+
+  // Filtered Results for Live Table
+  const filteredResults = useMemo(() => {
+    if (!activeJob?.results) return [];
+    return activeJob.results.filter((res) => {
+      if (statusFilter !== 'all' && res.status !== statusFilter) {
+        return false;
+      }
+      if (!searchQuery.trim()) return true;
+      const q = searchQuery.toLowerCase();
+      const ninMatch = res.nin.includes(q);
+      const nameMatch = `${res.details?.['First Name'] || ''} ${res.details?.['Surname'] || ''}`.toLowerCase().includes(q);
+      const stateMatch = `${res.details?.['State of Origin'] || ''} ${res.details?.['LGA of Origin'] || ''}`.toLowerCase().includes(q);
+      const phoneMatch = String(res.details?.['Mobile'] || '').includes(q);
+      return ninMatch || nameMatch || stateMatch || phoneMatch;
+    });
+  }, [activeJob?.results, statusFilter, searchQuery]);
+
+  // Successful count
+  const successfulCount = useMemo(() => {
+    return activeJob?.results.filter((r) => r.status === 'success').length || 0;
+  }, [activeJob?.results]);
+
+  // Failed count
+  const failedCount = useMemo(() => {
+    return activeJob?.results.filter((r) => r.status === 'failed').length || 0;
+  }, [activeJob?.results]);
+
+  // Progress metrics calculation
+  const progressPercent = useMemo(() => {
+    if (!activeJob || activeJob.totalNins === 0) return 0;
+    return Math.min(100, Math.round((activeJob.stats.processed / activeJob.totalNins) * 100));
+  }, [activeJob?.stats.processed, activeJob?.totalNins]);
+
+  // ===================== SINGLE NIN LOOKUP HANDLERS ===================== //
+  const handleVerifySingle = async (ninOverride?: string) => {
+    const raw = (ninOverride || singleNin).trim();
+    const cleaned = raw.replace(/\D/g, '');
+
+    if (cleaned.length !== 11) {
+      showToast('Nigerian NIN must be exactly 11 digits.', 'error');
+      return;
+    }
+
+    if (ninOverride) {
+      setSingleNin(cleaned);
+    }
+
+    setIsVerifyingSingle(true);
+    try {
+      const res = await verifyNinInBrowser(
+        cleaned,
+        settings.merchantKey,
+        settings.gatewayUrl,
+        settings.isDemo,
+        settings.proxyUrl
+      );
+
+      const record = {
+        nin: cleaned,
+        ok: res.ok,
+        status: (res.ok ? 'success' : 'failed') as 'success' | 'failed',
+        message: res.message,
+        data: res.data || {},
+        durationMs: res.durationMs,
+        timestamp: new Date().toISOString(),
+        source: res.source,
+      };
+
+      setSingleResult(record);
 
       if (res.ok) {
-        setIsServerAvailable(true);
-        const data = await res.json();
-        const jobs = data.jobs || [];
-        setJobList(jobs);
+        const fn = res.data?.['First Name'] || res.data?.['firstName'] || '';
+        const sn = res.data?.['Surname'] || res.data?.['surname'] || '';
+        const state = res.data?.['State of Origin'] || res.data?.['stateOfOrigin'] || '';
+        const lga = res.data?.['LGA of Origin'] || res.data?.['lgaOfOrigin'] || '';
+        const fullName = [fn, sn].filter(Boolean).join(' ') || 'Verified Taxpayer';
 
-        // Auto-select latest job if none currently active
-        if (!currentJobRef.current && jobs.length > 0) {
-          const detailRes = await fetch(`/api/bot/jobs/${jobs[0].id}`);
-          if (detailRes.ok) {
-            const d = await detailRes.json();
-            setCurrentJob(d.job);
-          }
-        } else if (currentJobRef.current && engineMode === 'server') {
-          const updated = jobs.find((j: any) => j.id === currentJobRef.current?.id);
-          if (updated && updated.status !== currentJobRef.current.status) {
-            const detailRes = await fetch(`/api/bot/jobs/${currentJobRef.current.id}`);
-            if (detailRes.ok) {
-              const d = await detailRes.json();
-              setCurrentJob(d.job);
-            }
-          }
+        // Save to local recent lookups
+        setRecentLookups((prev) => {
+          const filtered = prev.filter((r) => r.nin !== cleaned);
+          return [
+            {
+              nin: cleaned,
+              ok: true,
+              name: fullName,
+              state,
+              lga,
+              timestamp: new Date().toLocaleTimeString(),
+              data: res.data || {},
+            },
+            ...filtered,
+          ].slice(0, 10);
+        });
+
+        // Save to cloud if user is signed in
+        if (currentUser) {
+          saveTaxpayerToCloud(currentUser.uid, {
+            nin: cleaned,
+            fullName,
+            firstName: fn,
+            surname: sn,
+            state,
+            lga,
+            phone: res.data?.['Mobile'] || res.data?.['phone'] || '',
+            dob: res.data?.['Date of Birth'] || res.data?.['dob'] || '',
+            gender: res.data?.['Gender'] || res.data?.['gender'] || '',
+            tin: res.data?.['Taxpayer ID (TIN)'] || res.data?.['tin'] || '',
+            trackingId: res.data?.['Tracking ID'] || res.data?.['trackingId'] || '',
+            address: res.data?.['Residential Address'] || res.data?.['address'] || '',
+            status: 'verified',
+            verifiedAt: new Date().toISOString(),
+            details: res.data,
+          }).then(() => refreshCloudData(currentUser.uid));
         }
+
+        showToast(`NIN ${cleaned} verified successfully (${res.durationMs}ms)`, 'success');
       } else {
-        // Non-200 (e.g. static hosting on GitHub Pages)
-        setIsServerAvailable(false);
-        setEngineMode('browser');
-        loadLocalJobs();
+        showToast(`Verification failed: ${res.message}`, 'error');
       }
-    } catch {
-      // Server unreachable (static hosting / offline)
-      setIsServerAvailable(false);
-      setEngineMode('browser');
-      loadLocalJobs();
+    } catch (err: any) {
+      showToast(`Verification error: ${err.message}`, 'error');
+    } finally {
+      setIsVerifyingSingle(false);
     }
   };
 
-  // Extract NINs from text or file
-  const handleExtractNins = (text: string) => {
-    const matches = text.match(/\b\d{11}\b/g) || [];
-    const unique = Array.from(new Set(matches));
-    setParsedNins(unique);
-    return unique;
+  const handleExportSingleExcel = () => {
+    if (!singleResult || !singleResult.ok) return;
+    const row: Record<string, any> = {
+      NIN: singleResult.nin,
+      Status: 'VERIFIED',
+      Message: singleResult.message,
+      'Response Time (ms)': singleResult.durationMs,
+      'Verified At': singleResult.timestamp,
+      ...(singleResult.data || {}),
+    };
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet([row]);
+    XLSX.utils.book_append_sheet(wb, ws, 'Taxpayer');
+    const filename = `birs_taxpayer_${singleResult.nin}_${Date.now()}.xlsx`;
+    XLSX.writeFile(wb, filename);
+    showToast(`Exported ${filename}`, 'success');
   };
 
+  const handleAddSingleToBulk = (ninToAdd: string) => {
+    setInputText((prev) => {
+      const trimmed = prev.trim();
+      const currentList = trimmed ? trimmed.split(/\r?\n/).map((s) => s.trim()).filter(Boolean) : [];
+      if (!currentList.includes(ninToAdd)) {
+        currentList.push(ninToAdd);
+      }
+      return currentList.join('\n');
+    });
+    setActiveTab('bulk');
+    showToast(`Added ${ninToAdd} to Bulk Verification Queue`, 'info');
+  };
+
+  // ===================== RESUME BATCH FROM CLOUD ===================== //
+  const handleResumeCloudBatch = (batch: any) => {
+    if (!batch.nins || batch.nins.length === 0) {
+      showToast('No NIN list found in this batch.', 'error');
+      return;
+    }
+    setInputText(batch.nins.join('\n'));
+    setActiveTab('bulk');
+    setShowCloudHistoryModal(false);
+    showToast(`Resumed "${batch.name}" with ${batch.nins.length} NINs ready in queue!`, 'success');
+  };
+
+  const handleDeleteCloudBatch = async (batchId: string) => {
+    if (!currentUser) return;
+    try {
+      await deleteBatchFromCloud(currentUser.uid, batchId);
+      setCloudBatches((prev) => prev.filter((b) => b.id !== batchId));
+      showToast('Batch removed from cloud history', 'info');
+    } catch (err: any) {
+      showToast(`Failed to delete batch: ${err.message}`, 'error');
+    }
+  };
+
+  const handleExportCloudTaxpayersExcel = () => {
+    if (cloudTaxpayers.length === 0) {
+      showToast('No cloud taxpayers to export.', 'error');
+      return;
+    }
+    const rows = cloudTaxpayers.map((t) => ({
+      NIN: t.nin,
+      'Full Name': t.fullName,
+      State: t.state,
+      LGA: t.lga,
+      Phone: t.phone,
+      DOB: t.dob,
+      Gender: t.gender,
+      TIN: t.tin,
+      'Tracking ID': t.trackingId,
+      Address: t.address,
+      Status: 'VERIFIED',
+      'Verified At': t.verifiedAt,
+    }));
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet(rows);
+    XLSX.utils.book_append_sheet(wb, ws, 'All Cloud Taxpayers');
+    const filename = `birs_cloud_taxpayers_all_${Date.now()}.xlsx`;
+    XLSX.writeFile(wb, filename);
+    showToast(`Exported ${cloudTaxpayers.length} verified taxpayers from cloud!`, 'success');
+  };
+
+  // ===================== BULK BOT HANDLERS ===================== //
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    setIsUploading(true);
-    setFileName(file.name);
 
     const reader = new FileReader();
-    reader.onload = (evt) => {
-      try {
-        const data = new Uint8Array(evt.target?.result as ArrayBuffer);
-        const workbook = XLSX.read(data, { type: 'array' });
-        let extractedText = '';
+    const isExcel = file.name.endsWith('.xlsx') || file.name.endsWith('.xls') || file.name.endsWith('.csv');
 
-        workbook.SheetNames.forEach((sheetName) => {
-          const worksheet = workbook.Sheets[sheetName];
-          const rawJson = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: '' });
-          rawJson.forEach((row: any) => {
+    if (isExcel) {
+      reader.onload = (evt) => {
+        try {
+          const data = new Uint8Array(evt.target?.result as ArrayBuffer);
+          const workbook = XLSX.read(data, { type: 'array' });
+          const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+          const rows: any[][] = XLSX.utils.sheet_to_json(firstSheet, { header: 1 });
+
+          const found: string[] = [];
+          for (const row of rows) {
             if (Array.isArray(row)) {
-              extractedText += ' ' + row.join(' ');
+              for (const cell of row) {
+                const s = String(cell ?? '').trim();
+                if (/^\d{11}$/.test(s)) {
+                  found.push(s);
+                }
+              }
             }
-          });
-        });
+          }
 
-        const found = handleExtractNins(extractedText);
-        setInputNinsText(found.join('\n'));
-        if (found.length > 0) {
-          showToast(`Extracted ${found.length} valid 11-digit NINs from ${file.name}`, 'success');
-        } else {
-          showToast('No valid 11-digit numbers found in uploaded file.', 'error');
+          if (found.length === 0) {
+            showToast('No 11-digit NINs found in file cells.', 'error');
+            return;
+          }
+
+          const unique = Array.from(new Set(found));
+          setInputText((prev) => {
+            const combined = prev ? `${prev}\n${unique.join('\n')}` : unique.join('\n');
+            return combined;
+          });
+          showToast(`Successfully imported ${unique.length} unique NINs from ${file.name}`, 'success');
+        } catch (err: any) {
+          showToast(`Excel read error: ${err.message}`, 'error');
         }
-      } catch (err: any) {
-        showToast('Could not read spreadsheet file: ' + err.message, 'error');
-      } finally {
-        setIsUploading(false);
-      }
-    };
-    reader.readAsArrayBuffer(file);
+      };
+      reader.readAsArrayBuffer(file);
+    } else {
+      reader.onload = (evt) => {
+        const text = String(evt.target?.result || '');
+        const matches = text.match(/\b\d{11}\b/g) || [];
+        if (matches.length === 0) {
+          showToast('No 11-digit NINs found in text file.', 'error');
+          return;
+        }
+        const unique = Array.from(new Set(matches));
+        setInputText((prev) => {
+          const combined = prev ? `${prev}\n${unique.join('\n')}` : unique.join('\n');
+          return combined;
+        });
+        showToast(`Imported ${unique.length} unique NINs from ${file.name}`, 'success');
+      };
+      reader.readAsText(file);
+    }
+
+    if (e.target) e.target.value = '';
   };
 
-  const handleLoadSampleBatch = () => {
-    const sample = [
+  const handleLoadSamples = () => {
+    const samples = [
       '10293847561',
       '29384756102',
       '38475610293',
       '47561029384',
       '56102938475',
       '61029384756',
-      '70293847561',
-      '80394857261',
-      '91029384756',
-      '12345678901'
+      '75610293847',
+      '84756102938',
+      '93847561029',
+      '19283746501',
     ];
-    setInputNinsText(sample.join('\n'));
-    handleExtractNins(sample.join(' '));
-    setFileName('sample_taxpayer_batch.xlsx');
-    setIsDemoMode(true);
-    showToast('Loaded 10 demo NINs in Sandbox Mode. Click Launch to run!', 'success');
+    setInputText(samples.join('\n'));
+    showToast(`Loaded ${samples.length} sample NINs`, 'info');
   };
 
-  // Bot Controls
-  const handleStartBot = async () => {
-    const nins = parsedNins.length > 0 ? parsedNins : handleExtractNins(inputNinsText);
-    if (nins.length === 0) {
-      showToast('Please provide at least one valid 11-digit NIN', 'error');
+  const handleStartBot = () => {
+    if (extractedNins.length === 0) {
+      showToast('Please paste or upload at least one valid 11-digit NIN.', 'error');
       return;
     }
 
-    // In Browser Engine (GitHub Pages / Standalone static)
-    if (engineMode === 'browser' || !isServerAvailable) {
-      const jobId = 'local_' + Date.now();
-      const newJob: BotJob = {
-        id: jobId,
-        name: fileName ? `File: ${fileName}` : `Batch (${nins.length} NINs)`,
-        status: 'running',
-        createdAt: new Date().toISOString(),
-        totalNins: nins.length,
-        queue: [...nins],
-        inFlight: [],
-        results: [],
-        logs: [],
-        settings: {
-          delayMs,
-          jitterMs,
-          concurrency,
-          maxRetries,
-          timeoutMs: 25000,
-          merchantKey: merchantKey.trim(),
-          gatewayUrl: gatewayUrl || DEFAULT_GATEWAY_URL,
-          proxyUrl: proxyUrl.trim() || undefined,
-          autoRetry,
-          isDemo: isDemoMode,
-        },
-        stats: {
-          total: nins.length,
-          processed: 0,
-          success: 0,
-          failed: 0,
-          retries: 0,
-          avgTimeMs: 0,
-        },
-      };
+    const newJob: BotJob = {
+      id: `job_${Date.now()}`,
+      name: `Batch (${extractedNins.length} NINs) - ${new Date().toLocaleDateString()}`,
+      status: 'running',
+      createdAt: new Date().toISOString(),
+      totalNins: extractedNins.length,
+      queue: [...extractedNins],
+      inFlight: [],
+      results: [],
+      logs: [],
+      settings: { ...settings },
+      stats: {
+        total: extractedNins.length,
+        processed: 0,
+        success: 0,
+        failed: 0,
+        retries: 0,
+        avgTimeMs: 0,
+      },
+    };
 
-      setCurrentJob(newJob);
-      saveLocalJob(newJob);
-      showToast(
-        `Autonomous Bot started for ${nins.length} NINs [${isDemoMode ? 'Simulated Sandbox' : 'Live Gateway Real Verification'}]`,
-        'success'
-      );
-      clientBotManagerRef.current?.runJob(newJob);
+    setActiveJob(newJob);
+    botManagerRef.current?.runJob(newJob);
+    showToast(`Autonomous verification started for ${extractedNins.length} NINs`, 'success');
+  };
+
+  const handlePauseBot = () => {
+    if (!activeJob) return;
+    botManagerRef.current?.pauseJob(activeJob.id);
+    setActiveJob((prev) => (prev ? { ...prev, status: 'paused' } : null));
+    showToast('Verification paused (progress saved)', 'info');
+  };
+
+  const handleResumeBot = () => {
+    if (!activeJob) return;
+    botManagerRef.current?.resumeJob(activeJob.id);
+    setActiveJob((prev) => (prev ? { ...prev, status: 'running' } : null));
+    showToast('Verification resumed', 'info');
+  };
+
+  const handleStopBot = () => {
+    if (!activeJob) return;
+    botManagerRef.current?.stopJob(activeJob.id);
+    setActiveJob((prev) => (prev ? { ...prev, status: 'stopped' } : null));
+    showToast('Verification stopped', 'info');
+  };
+
+  const handleReset = () => {
+    if (activeJob && activeJob.status === 'running') {
+      botManagerRef.current?.stopJob(activeJob.id);
+    }
+    setActiveJob(null);
+    showToast('Batch cleared', 'info');
+  };
+
+  const handleExportSuccessfulExcel = () => {
+    if (!activeJob || successfulCount === 0) {
+      showToast('No verified taxpayers to export yet.', 'error');
       return;
     }
-
-    // Server-Side Engine
     try {
-      const res = await fetch('/api/bot/jobs', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          nins,
-          name: fileName ? `File: ${fileName}` : `Batch (${nins.length} NINs)`,
-          delayMs,
-          jitterMs,
-          concurrency,
-          maxRetries,
-          autoRetry,
-          merchantKey,
-          isDemo: isDemoMode,
-        }),
+      exportResultsInBrowser(activeJob, 'xlsx', 'success');
+      showToast(`Exported ${successfulCount} verified taxpayers to Excel!`, 'success');
+    } catch (err: any) {
+      showToast(err.message, 'error');
+    }
+  };
+
+  const handleExportSuccessfulCsv = () => {
+    if (!activeJob || successfulCount === 0) {
+      showToast('No verified taxpayers to export yet.', 'error');
+      return;
+    }
+    try {
+      exportResultsInBrowser(activeJob, 'csv', 'success');
+      showToast(`Exported ${successfulCount} verified taxpayers to CSV!`, 'success');
+    } catch (err: any) {
+      showToast(err.message, 'error');
+    }
+  };
+
+  const handleExportAll = () => {
+    if (!activeJob || activeJob.results.length === 0) {
+      showToast('No results to export yet.', 'error');
+      return;
+    }
+    try {
+      exportResultsInBrowser(activeJob, 'xlsx', 'all');
+      showToast(`Exported all ${activeJob.results.length} results to Excel!`, 'success');
+    } catch (err: any) {
+      showToast(err.message, 'error');
+    }
+  };
+
+  const handleTestProxy = async () => {
+    setIsTestingProxy(true);
+    try {
+      const url = settings.proxyUrl || '/api/verify';
+      const result = await testProxyConnection(url, settings.merchantKey);
+      setProxyStatus({
+        tested: true,
+        ok: result.ok,
+        latencyMs: result.latencyMs,
+        message: result.message,
       });
-
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        showToast('Failed to start bot: ' + (err.error || 'Unknown error'), 'error');
-        return;
-      }
-
-      const data = await res.json();
-      const jobRes = await fetch(`/api/bot/jobs/${data.jobId}`);
-      if (jobRes.ok) {
-        const jobData = await jobRes.json();
-        setCurrentJob(jobData.job);
-        showToast(`Bot started for ${nins.length} NINs (${isDemoMode ? 'Sandbox Mode' : 'Live Gateway'})`, 'success');
-      }
-      fetchJobs();
-    } catch (err: any) {
-      showToast('Failed to trigger bot worker: ' + err.message, 'error');
-    }
-  };
-
-  const handlePauseBot = async () => {
-    if (!currentJob) return;
-    if (engineMode === 'browser' || !isServerAvailable) {
-      clientBotManagerRef.current?.pauseJob(currentJob.id);
-      setCurrentJob((prev) => (prev ? { ...prev, status: 'paused' } : prev));
-      showToast('In-Browser Bot paused.', 'info');
-      return;
-    }
-    await fetch(`/api/bot/jobs/${currentJob.id}/pause`, { method: 'POST' });
-    setCurrentJob((prev) => (prev ? { ...prev, status: 'paused' } : prev));
-    showToast('Autonomous bot paused.', 'info');
-  };
-
-  const handleResumeBot = async () => {
-    if (!currentJob) return;
-    if (engineMode === 'browser' || !isServerAvailable) {
-      clientBotManagerRef.current?.resumeJob(currentJob.id);
-      setCurrentJob((prev) => (prev ? { ...prev, status: 'running' } : prev));
-      showToast('In-Browser Bot resumed.', 'info');
-      return;
-    }
-    await fetch(`/api/bot/jobs/${currentJob.id}/resume`, { method: 'POST' });
-    setCurrentJob((prev) => (prev ? { ...prev, status: 'running' } : prev));
-    showToast('Autonomous bot resumed.', 'info');
-  };
-
-  const handleStopBot = async () => {
-    if (!currentJob) return;
-    if (engineMode === 'browser' || !isServerAvailable) {
-      clientBotManagerRef.current?.stopJob(currentJob.id);
-      setCurrentJob((prev) => (prev ? { ...prev, status: 'stopped' } : prev));
-      showToast('In-Browser Bot execution stopped.', 'info');
-      return;
-    }
-    await fetch(`/api/bot/jobs/${currentJob.id}/stop`, { method: 'POST' });
-    setCurrentJob((prev) => (prev ? { ...prev, status: 'stopped' } : prev));
-    showToast('Autonomous bot execution stopped.', 'info');
-  };
-
-  const handleRetryFailed = async () => {
-    if (!currentJob) return;
-    if (engineMode === 'browser' || !isServerAvailable) {
-      const failedNins = currentJob.results.filter((r) => r.status === 'failed').map((r) => r.nin);
-      if (failedNins.length === 0) {
-        showToast('No failed NINs to retry in this batch.', 'info');
-        return;
-      }
-      const retriedJob: BotJob = {
-        ...currentJob,
-        status: 'running',
-        queue: [...failedNins],
-        inFlight: [],
-        results: currentJob.results.filter((r) => r.status !== 'failed'),
-        stats: {
-          ...currentJob.stats,
-          processed: currentJob.stats.processed - failedNins.length,
-          failed: 0,
-        },
-      };
-      setCurrentJob(retriedJob);
-      saveLocalJob(retriedJob);
-      showToast(`Retrying ${failedNins.length} failed NINs in browser...`, 'info');
-      clientBotManagerRef.current?.runJob(retriedJob);
-      return;
-    }
-
-    const res = await fetch(`/api/bot/jobs/${currentJob.id}/retry-failed`, { method: 'POST' });
-    if (res.ok) {
-      const d = await fetch(`/api/bot/jobs/${currentJob.id}`).then((r) => r.json());
-      setCurrentJob(d.job);
-      showToast('Re-enqueued failed NINs for retry.', 'success');
-    }
-  };
-
-  const handleSelectJob = async (jobId: string) => {
-    if (engineMode === 'browser' || !isServerAvailable) {
-      const found = jobList.find((j: any) => j.id === jobId);
-      if (found) setCurrentJob(found);
-      return;
-    }
-    const res = await fetch(`/api/bot/jobs/${jobId}`);
-    if (res.ok) {
-      const data = await res.json();
-      setCurrentJob(data.job);
-    }
-  };
-
-  // Test connection to Server-Side Proxy (Render, Vercel, Node, Python, Go)
-  const handleTestProxy = async (targetUrl?: string) => {
-    const url = (targetUrl !== undefined ? targetUrl : proxyUrl).trim();
-    if (!url) {
-      showToast('Please enter a proxy URL to test', 'error');
-      return;
-    }
-    setProxyTesting(true);
-    setProxyTestResult(null);
-    try {
-      const result = await testProxyConnection(url, merchantKey);
-      setProxyTestResult(result);
       if (result.ok) {
-        setProxyUrl(url);
-        localStorage.setItem('birs_proxy_url', url);
-        showToast(`Proxy connected! Latency: ${result.latencyMs}ms`, 'success');
+        showToast(`Proxy connected (${result.latencyMs}ms)`, 'success');
       } else {
-        showToast(result.message, 'error');
+        showToast('Proxy connection failed', 'error');
       }
     } catch (err: any) {
-      setProxyTestResult({
+      setProxyStatus({
+        tested: true,
         ok: false,
         latencyMs: 0,
-        message: err.message || 'Connection test failed',
+        message: err.message,
       });
-      showToast('Proxy connection test failed', 'error');
+      showToast('Proxy check error', 'error');
     } finally {
-      setProxyTesting(false);
+      setIsTestingProxy(false);
     }
   };
-
-  // Single NIN check
-  const handleVerifySingle = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const clean = singleNin.replace(/\D/g, '');
-    if (clean.length !== 11) {
-      showToast('Please enter a valid 11-digit NIN', 'error');
-      return;
-    }
-    setSingleLoading(true);
-    setSingleResult(null);
-
-    // 1. If server backend is available and in server mode, query backend proxy (/api/verify)
-    if (isServerAvailable && engineMode === 'server') {
-      try {
-        const res = await fetch('/api/verify', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            nin: clean,
-            merchantKey: merchantKey.trim(),
-            gatewayUrl: gatewayUrl || DEFAULT_GATEWAY_URL,
-            isDemo: isDemoMode,
-          }),
-        });
-        const data = await res.json();
-        setSingleResult({
-          status: data.status,
-          message: data.message,
-          details: data.details || {},
-          durationMs: data.durationMs || 0,
-          nin: clean,
-          timestamp: new Date().toISOString(),
-          isDemoSimulation: isDemoMode,
-          source: 'BIRS Live Gateway (via Server)',
-        });
-        if (data.status === 'success') {
-          showToast('Taxpayer NIN verified successfully via Live Gateway!', 'success');
-        } else {
-          showToast(`Verification failed: ${data.message}`, 'error');
-        }
-        setSingleLoading(false);
-        return;
-      } catch {
-        // Fall through to browser/proxy verification below
-      }
-    }
-
-    // 2. Direct browser execution / Proxy / Extension Bridge (100% genuine)
-    try {
-      const res = await verifyNinInBrowser(
-        clean,
-        merchantKey.trim(),
-        gatewayUrl || DEFAULT_GATEWAY_URL,
-        isDemoMode,
-        proxyUrl.trim() || undefined
-      );
-
-      setSingleResult({
-        status: res.ok ? 'success' : 'failed',
-        message: res.message,
-        details: res.data || {},
-        durationMs: res.durationMs,
-        nin: clean,
-        timestamp: new Date().toISOString(),
-        isCorsBlocked: res.isCorsBlocked,
-        isDemoSimulation: res.isDemoSimulation,
-        source: res.source,
-      });
-
-      if (res.ok) {
-        showToast(
-          isDemoMode
-            ? 'Taxpayer verified (Simulated Demo Sandbox)'
-            : `Taxpayer NIN verified successfully via ${res.source || 'Live Gateway'}!`,
-          'success'
-        );
-      } else {
-        if (res.isCorsBlocked) {
-          showToast('Browser CORS blocked direct gateway access. See solutions below.', 'error');
-        } else {
-          showToast(`Verification failed: ${res.message}`, 'error');
-        }
-      }
-    } catch (err: any) {
-      setSingleResult({
-        status: 'failed',
-        message: err?.message || 'Verification error occurred',
-        details: {},
-        durationMs: 0,
-        nin: clean,
-        timestamp: new Date().toISOString(),
-      });
-      showToast(`Verification error: ${err?.message || 'Failed to verify'}`, 'error');
-    } finally {
-      setSingleLoading(false);
-    }
-  };
-
-  // Safe client-side file exporter (works 100% reliably in any environment)
-  const handleDownloadExport = async (format: 'xlsx' | 'csv', filter: 'all' | 'success') => {
-    if (!currentJob || currentJob.results.length === 0) {
-      showToast('No verification results to export yet. Run a verification job first.', 'error');
-      return;
-    }
-    try {
-      exportResultsInBrowser(currentJob, format, filter);
-      showToast(`Exported ${format.toUpperCase()} (${filter}) report successfully!`, 'success');
-    } catch (err: any) {
-      showToast('Failed to export report: ' + err.message, 'error');
-    }
-  };
-
-  // Filtered results
-  const filteredResults = (currentJob?.results || []).filter((r) => {
-    if (resultFilter === 'success' && r.status !== 'success') return false;
-    if (resultFilter === 'failed' && r.status !== 'failed') return false;
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase();
-      const matchNin = r.nin.includes(q);
-      const matchMsg = r.message.toLowerCase().includes(q);
-      const matchDetails = JSON.stringify(r.details || {}).toLowerCase().includes(q);
-      return matchNin || matchMsg || matchDetails;
-    }
-    return true;
-  });
-
-  const filteredLogs = (currentJob?.logs || []).filter((l) => {
-    if (logFilter === 'error') return l.level === 'error' || l.level === 'warn';
-    return true;
-  });
-
-  // Calculate ETA and speed
-  const processed = currentJob?.stats.processed || 0;
-  const total = currentJob?.totalNins || 0;
-  const remaining = Math.max(0, total - processed);
-  const avgTimeMs = currentJob?.stats.avgTimeMs || (delayMs + jitterMs / 2);
-  const etaSeconds = Math.round((remaining * avgTimeMs) / 1000);
-  const progressPct = total > 0 ? Math.min(100, Math.round((processed / total) * 100)) : 0;
-  const throughputPerMin = avgTimeMs > 0 ? Math.round(60000 / avgTimeMs) : 0;
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-emerald-600 selection:text-white">
-      {/* Top Navbar */}
-      <header className="border-b border-slate-800 bg-slate-900/90 backdrop-blur sticky top-0 z-40 px-4 lg:px-8 py-3.5">
-        <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-4">
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans antialiased selection:bg-emerald-500 selection:text-white">
+      {/* Toast Notification */}
+      {toast && (
+        <div
+          className={`fixed top-4 right-4 z-50 flex items-center gap-3 px-4 py-3 rounded-lg shadow-xl border text-sm font-medium transition-all duration-200 ${
+            toast.type === 'success'
+              ? 'bg-emerald-950/90 border-emerald-500/50 text-emerald-200'
+              : toast.type === 'error'
+              ? 'bg-rose-950/90 border-rose-500/50 text-rose-200'
+              : 'bg-slate-900/90 border-slate-700 text-slate-200'
+          }`}
+        >
+          {toast.type === 'success' && <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />}
+          {toast.type === 'error' && <XCircle className="w-5 h-5 text-rose-400 shrink-0" />}
+          {toast.type === 'info' && <Info className="w-5 h-5 text-blue-400 shrink-0" />}
+          <span>{toast.message}</span>
+        </div>
+      )}
+
+      {/* Main Header */}
+      <header className="border-b border-slate-800/80 bg-slate-900/60 backdrop-blur-md sticky top-0 z-30">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-emerald-500 to-green-700 flex items-center justify-center shadow-lg shadow-emerald-900/40 border border-emerald-400/30">
-              <span className="text-white font-extrabold text-2xl tracking-tighter">N</span>
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-700 flex items-center justify-center shadow-lg shadow-emerald-500/20 text-white font-black text-xl">
+              B
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h1 className="text-base lg:text-lg font-bold tracking-tight text-white">
-                  BIRS NIN Autonomous Bot
+                <h1 className="text-base sm:text-lg font-bold tracking-tight text-white">
+                  BIRS NIN Verifier
                 </h1>
-                <span className={`text-xs px-2 py-0.5 rounded-full border font-medium flex items-center gap-1.5 ${
-                  isDemoMode
-                    ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30'
-                    : 'bg-amber-500/10 text-amber-300 border-amber-500/30'
-                }`}>
-                  <span className={`w-1.5 h-1.5 rounded-full ${isDemoMode ? 'bg-emerald-400' : 'bg-amber-400'} animate-pulse`}></span>
-                  {isDemoMode ? 'Sandbox Active' : 'Live Gateway Active'}
+                <span className="text-[10px] uppercase font-semibold tracking-wider bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-2 py-0.5 rounded-full">
+                  Live Gateway
                 </span>
               </div>
-              <p className="text-xs text-slate-400">
-                Self-operating bulk taxpayer validator • Background scheduler &amp; export
+              <p className="text-xs text-slate-400 hidden sm:block">
+                Benue Internal Revenue Service &bull; Cross-Device Cloud Sync
               </p>
             </div>
           </div>
 
-          {/* Mode Selector and Navigation Tabs */}
-          <div className="flex items-center gap-2.5 flex-wrap">
-            <div className="flex items-center bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs font-medium">
+          <div className="flex items-center gap-2 sm:gap-3">
+            {/* Mode Switcher Tabs */}
+            <div className="flex bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs font-semibold">
               <button
-                type="button"
-                onClick={() => {
-                  setIsDemoMode(true);
-                  showToast('Sandbox / Demo Mode enabled (instant realistic taxpayer records)', 'info');
-                }}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all ${
-                  isDemoMode
-                    ? 'bg-emerald-600 text-white shadow font-semibold'
+                onClick={() => setActiveTab('bulk')}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
+                  activeTab === 'bulk'
+                    ? 'bg-emerald-600 text-white shadow-md shadow-emerald-900/40'
                     : 'text-slate-400 hover:text-slate-200'
                 }`}
               >
-                <Sparkles className="w-3.5 h-3.5" />
-                <span>Sandbox Demo</span>
+                <Radio className="w-3.5 h-3.5" />
+                <span>Bulk Bot</span>
+                {extractedNins.length > 0 && (
+                  <span className="ml-1 px-1.5 py-0.2 rounded-full text-[10px] bg-emerald-950 text-emerald-300 border border-emerald-800">
+                    {extractedNins.length}
+                  </span>
+                )}
               </button>
+
               <button
-                type="button"
-                onClick={() => {
-                  setIsDemoMode(false);
-                  showToast('Live BIRS Portal Mode enabled (queries service-gateway.bsg.com.ng)', 'info');
-                }}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all ${
-                  !isDemoMode
-                    ? 'bg-amber-600 text-white shadow font-semibold'
+                onClick={() => setActiveTab('single')}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
+                  activeTab === 'single'
+                    ? 'bg-emerald-600 text-white shadow-md shadow-emerald-900/40'
                     : 'text-slate-400 hover:text-slate-200'
                 }`}
               >
-                <Zap className="w-3.5 h-3.5" />
-                <span>Live Portal</span>
+                <UserCheck className="w-3.5 h-3.5" />
+                <span>Single Lookup</span>
               </button>
             </div>
 
-            {/* Engine Selector */}
-            <button
-              type="button"
-              onClick={() => {
-                const next = engineMode === 'server' ? 'browser' : 'server';
-                setEngineMode(next);
-                showToast(`Switched execution mode to: ${next === 'browser' ? 'In-Browser Engine (Client-Side)' : 'Node.js Server Engine'}`, 'info');
-              }}
-              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs border font-medium transition-all ${
-                engineMode === 'browser' || !isServerAvailable
-                  ? 'bg-blue-950/60 text-blue-300 border-blue-500/40 hover:bg-blue-900/60'
-                  : 'bg-purple-950/60 text-purple-300 border-purple-500/40 hover:bg-purple-900/60'
-              }`}
-              title="Click to toggle between In-Browser and Node.js Server Engines"
-            >
-              {engineMode === 'browser' || !isServerAvailable ? (
-                <>
-                  <Cpu className="w-3.5 h-3.5 text-blue-400" />
-                  <span>Browser Engine</span>
-                </>
-              ) : (
-                <>
-                  <Server className="w-3.5 h-3.5 text-purple-400" />
-                  <span>Server Engine</span>
-                </>
-              )}
-            </button>
+            {/* Cloud History & User Account Button */}
+            {currentUser ? (
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setShowCloudHistoryModal(true)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-emerald-950/60 hover:bg-emerald-900/60 text-emerald-300 border border-emerald-800/60 transition-colors cursor-pointer"
+                  title="View your saved batches and resume work done"
+                >
+                  <CloudCheck className="w-3.5 h-3.5 text-emerald-400" />
+                  <span className="hidden sm:inline">Cloud History</span>
+                  {cloudBatches.length > 0 && (
+                    <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-emerald-500 text-slate-950 font-bold">
+                      {cloudBatches.length}
+                    </span>
+                  )}
+                </button>
 
-            {/* GitHub Pages Deploy Guide Button */}
-            <button
-              type="button"
-              onClick={() => setShowDeployGuide(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-emerald-950/50 hover:bg-emerald-900/60 text-emerald-300 border border-emerald-500/40 shadow transition-all cursor-pointer"
-              title="GitHub Pages Fix & Deployment Setup Guide"
-            >
-              <Globe className="w-3.5 h-3.5 text-emerald-400" />
-              <span>GitHub Pages Fix</span>
-            </button>
-
-            {/* Server-Side Proxy Hub Button */}
-            <button
-              type="button"
-              onClick={() => setShowProxyHub(true)}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border shadow transition-all cursor-pointer ${
-                proxyUrl
-                  ? 'bg-purple-950/60 hover:bg-purple-900/60 text-purple-300 border-purple-500/50'
-                  : 'bg-slate-800/80 hover:bg-slate-700/80 text-slate-300 border-slate-700/60'
-              }`}
-              title="Configure Server-Side Proxy (Render, Vercel, Python, Go, Node.js) to bypass browser CORS"
-            >
-              <Server className="w-3.5 h-3.5 text-purple-400" />
-              <span>Server Proxy</span>
-              {proxyUrl ? (
-                <span className="w-2 h-2 rounded-full bg-emerald-400 ml-0.5 animate-pulse" title="Proxy connected" />
-              ) : (
-                <span className="text-[10px] bg-slate-900/90 text-amber-300 px-1 py-0.2 rounded border border-amber-500/30">CORS</span>
-              )}
-            </button>
-
-            {/* CORS & HTTP 405 Fix Guide Button */}
-            <button
-              type="button"
-              onClick={() => setShowCorsModal(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-gradient-to-r from-red-950/70 to-purple-950/70 hover:from-red-900/80 hover:to-purple-900/80 text-red-300 border border-red-500/50 shadow transition-all cursor-pointer"
-              title="Fix Browser CORS blocking and HTTP 405 Method Not Allowed error"
-            >
-              <ShieldAlert className="w-3.5 h-3.5 text-red-400" />
-              <span>CORS &amp; 405 Fix</span>
-              <span className="text-[10px] bg-red-500/20 text-red-200 px-1 py-0.5 rounded border border-red-500/40 font-mono">Guide</span>
-            </button>
-
-            {/* Direct Official BIRS Portal Link */}
-            <a
-              href={BIRS_DIRECT_PORTAL_URL}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-blue-950/50 hover:bg-blue-900/60 text-blue-300 border border-blue-500/40 shadow transition-all"
-              title="Open official Benue State Internal Revenue Service taxpayer verification page directly (No CORS)"
-            >
-              <Building2 className="w-3.5 h-3.5 text-blue-400" />
-              <span>Official BIRS Portal</span>
-              <ExternalLink className="w-3 h-3 text-blue-400/80" />
-            </a>
-
-            <nav className="flex items-center gap-1 bg-slate-800/80 p-1 rounded-xl border border-slate-700/60 text-xs font-medium">
+                <div className="flex items-center gap-2 pl-1 border-l border-slate-800">
+                  {currentUser.photoURL ? (
+                    <img
+                      src={currentUser.photoURL}
+                      alt={currentUser.displayName || 'User'}
+                      className="w-7 h-7 rounded-full border border-emerald-500/50"
+                    />
+                  ) : (
+                    <div className="w-7 h-7 rounded-full bg-emerald-800 text-emerald-100 flex items-center justify-center text-xs font-bold">
+                      {(currentUser.displayName || currentUser.email || 'U')[0].toUpperCase()}
+                    </div>
+                  )}
+                  <button
+                    onClick={handleLogout}
+                    title="Sign Out"
+                    className="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-slate-800 transition-colors cursor-pointer"
+                  >
+                    <LogOut className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            ) : (
               <button
-                onClick={() => setActiveTab('bot')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all ${
-                  activeTab === 'bot'
-                    ? 'bg-emerald-600 text-white shadow'
-                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'
-                }`}
+                onClick={handleLogin}
+                disabled={isAuthLoading}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white shadow-md shadow-emerald-900/30 transition-all cursor-pointer"
+                title="Sign in with Google to sync work and history across devices"
               >
-                <Bot className="w-4 h-4" />
-                <span>Autonomous Bot</span>
-                {currentJob && currentJob.status === 'running' && (
-                  <span className="w-2 h-2 rounded-full bg-emerald-300 animate-ping ml-0.5" />
-                )}
+                <LogIn className="w-3.5 h-3.5" />
+                <span>Sign In</span>
               </button>
-              <button
-                onClick={() => setActiveTab('single')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all ${
-                  activeTab === 'single'
-                    ? 'bg-emerald-600 text-white shadow'
-                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'
-                }`}
-              >
-                <Search className="w-4 h-4" />
-                <span>Instant Lookup</span>
-              </button>
-              <button
-                onClick={() => setActiveTab('standalone')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all ${
-                  activeTab === 'standalone'
-                    ? 'bg-emerald-600 text-white shadow'
-                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'
-                }`}
-              >
-                <Code2 className="w-4 h-4" />
-                <span>Headless &amp; Extension</span>
-              </button>
-              <button
-                onClick={() => setActiveTab('settings')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all ${
-                  activeTab === 'settings'
-                    ? 'bg-emerald-600 text-white shadow'
-                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'
-                }`}
-              >
-                <SlidersHorizontal className="w-4 h-4" />
-                <span>Settings</span>
-              </button>
-            </nav>
+            )}
+
+            {/* Settings Modal Button */}
+            <button
+              onClick={() => setShowSettingsModal(true)}
+              title="Configure Proxy & Gateway Settings"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-colors cursor-pointer"
+            >
+              <Settings className="w-3.5 h-3.5 text-slate-400" />
+              <span className="hidden md:inline">Settings</span>
+            </button>
           </div>
         </div>
       </header>
 
-      {/* GitHub Pages / Static Hosting Top Notification */}
-      {(!isServerAvailable || typeof window !== 'undefined' && window.location.hostname.includes('github.io')) && (
-        <div className="bg-gradient-to-r from-emerald-950/80 via-slate-900 to-purple-950/80 border-b border-emerald-500/30 px-4 py-2 text-xs flex items-center justify-between gap-3 text-slate-300">
-          <div className="flex items-center gap-2 max-w-4xl">
-            <Globe className="w-4 h-4 text-emerald-400 shrink-0" />
-            <span>
-              <strong className="text-emerald-300 font-semibold">GitHub Pages Ready:</strong> Running in In-Browser Engine mode. Full bulk verification, logs, Excel/CSV export, and standalone script generators work directly in your browser.
-            </span>
-          </div>
-          <div className="flex items-center gap-3 shrink-0">
-            <button
-              onClick={() => setShowCorsModal(true)}
-              className="text-red-300 hover:text-white underline font-semibold flex items-center gap-1 text-xs cursor-pointer"
-              title="Fix CORS and HTTP 405 Method Not Allowed errors"
-            >
-              <ShieldAlert className="w-3.5 h-3.5 text-red-400" />
-              <span>CORS &amp; 405 Fix Guide</span>
-            </button>
-            <span className="text-slate-600">|</span>
-            <button
-              onClick={() => setShowProxyHub(true)}
-              className="text-purple-300 hover:text-white underline font-semibold flex items-center gap-1 text-xs cursor-pointer"
-              title="Configure Server-Side Proxy (Render/Vercel/Node/Python/Go) to bypass CORS"
-            >
-              <Server className="w-3.5 h-3.5 text-purple-400" />
-              <span>Server Proxy (CORS Fix)</span>
-            </button>
-            <span className="text-slate-600">|</span>
-            <a
-              href={BIRS_DIRECT_PORTAL_URL}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-emerald-300 hover:text-white underline font-semibold flex items-center gap-1 text-xs"
-              title="Verify directly on official Benue State Internal Revenue Service page without CORS"
-            >
-              <span>Direct BIRS Page</span>
-              <ExternalLink className="w-3 h-3" />
-            </a>
-            <span className="text-slate-600">|</span>
-            <button
-              onClick={() => setShowDeployGuide(true)}
-              className="text-emerald-400 hover:text-emerald-300 underline font-semibold shrink-0 cursor-pointer text-xs"
-            >
-              How to fix elight2026.github.io/birm →
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Floating In-App Toast */}
-      {toast && (
-        <div className={`fixed top-4 right-4 z-50 flex items-center gap-3 px-4 py-3 rounded-2xl shadow-2xl text-xs font-semibold border backdrop-blur-md transition-all ${
-          toast.type === 'success'
-            ? 'bg-emerald-950/95 text-emerald-200 border-emerald-500/50 shadow-emerald-950/50'
-            : toast.type === 'error'
-            ? 'bg-red-950/95 text-red-200 border-red-500/50 shadow-red-950/50'
-            : 'bg-slate-900/95 text-slate-200 border-slate-700 shadow-slate-950/50'
-        }`}>
-          {toast.type === 'success' && <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />}
-          {toast.type === 'error' && <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />}
-          {toast.type === 'info' && <Zap className="w-4 h-4 text-amber-400 shrink-0" />}
-          <span>{toast.message}</span>
-          <button
-            onClick={() => setToast(null)}
-            className="ml-2 text-slate-400 hover:text-white text-sm leading-none"
-            title="Dismiss"
-          >
-            ✕
-          </button>
-        </div>
-      )}
-
-      {/* Main Content Area */}
-      <main className="flex-1 max-w-7xl w-full mx-auto p-4 lg:p-8 space-y-6">
-        {activeTab === 'bot' && (
-          <div className="space-y-6">
-            {/* Top Stat Ribbon & Active Job Switcher */}
-            <div className="flex flex-wrap items-center justify-between gap-4 bg-slate-900 border border-slate-800 rounded-2xl p-4 lg:p-5 shadow-sm">
-              <div className="flex items-center gap-3">
-                <div className={`p-2.5 rounded-xl border ${
-                  currentJob?.status === 'running'
-                    ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
-                    : currentJob?.status === 'paused'
-                    ? 'bg-amber-500/10 border-amber-500/30 text-amber-400'
-                    : 'bg-slate-800 border-slate-700 text-slate-400'
-                }`}>
-                  <Bot className="w-5 h-5" />
-                </div>
+      {/* Main Container */}
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 flex-1 w-full flex flex-col gap-6">
+        
+        {/* ===================== VIEW 1: SINGLE NIN LOOKUP ===================== */}
+        {activeTab === 'single' && (
+          <div className="flex flex-col gap-6">
+            {/* Single Lookup Input Card */}
+            <div className="bg-slate-900/70 border border-slate-800 rounded-2xl p-5 sm:p-6 shadow-xl flex flex-col gap-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800/80 pb-4">
                 <div>
                   <div className="flex items-center gap-2">
-                    <span className="font-semibold text-slate-200">
-                      {currentJob ? currentJob.name : 'No Active Verification Job'}
+                    <UserCheck className="w-5 h-5 text-emerald-400" />
+                    <h2 className="text-base font-bold text-white">
+                      Instant Single NIN Verification
+                    </h2>
+                    <span className="text-[10px] font-semibold uppercase px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                      Real-time
                     </span>
-                    {currentJob && (
-                      <span className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded-full border ${
-                        currentJob.status === 'running'
-                          ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 animate-pulse'
-                          : currentJob.status === 'paused'
-                          ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
-                          : currentJob.status === 'completed'
-                          ? 'bg-blue-500/20 text-blue-300 border-blue-500/40'
-                          : 'bg-slate-800 text-slate-400 border-slate-700'
-                      }`}>
-                        {currentJob.status}
-                      </span>
-                    )}
                   </div>
-                  <p className="text-xs text-slate-400 mt-0.5">
-                    {currentJob
-                      ? `Created ${new Date(currentJob.createdAt).toLocaleTimeString()} • ${currentJob.totalNins} total items`
-                      : 'Upload an Excel spreadsheet or paste NINs below to launch the autonomous verification agent.'}
+                  <p className="text-xs text-slate-400 mt-1">
+                    Enter an 11-digit NIN to query the live BIRS gateway and view full identity credentials.
                   </p>
                 </div>
-              </div>
 
-              {/* Job Switcher Dropdown */}
-              {jobList.length > 0 && (
-                <div className="flex items-center gap-2 bg-slate-950 px-3 py-1.5 rounded-xl border border-slate-800">
-                  <History className="w-3.5 h-3.5 text-slate-400" />
-                  <span className="text-xs text-slate-400">Past Jobs:</span>
-                  <select
-                    value={currentJob?.id || ''}
-                    onChange={(e) => handleSelectJob(e.target.value)}
-                    aria-label="Select past job"
-                    className="bg-slate-800 border border-slate-700 text-slate-200 text-xs rounded-lg px-2.5 py-1 focus:outline-none focus:ring-1 focus:ring-emerald-500 cursor-pointer"
-                  >
-                    <option value="" disabled>Select Job</option>
-                    {jobList.map((j) => (
-                      <option key={j.id} value={j.id}>
-                        {j.name} ({j.stats.success}/{j.totalNins}) [{j.status}]
-                      </option>
-                    ))}
-                  </select>
-                  <button
-                    onClick={fetchJobs}
-                    title="Refresh jobs"
-                    className="text-slate-400 hover:text-slate-200 p-1 hover:bg-slate-800 rounded transition-colors"
-                  >
-                    <RefreshCw className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              )}
-            </div>
-
-            {/* Input & Bot Controls Section */}
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-              {/* Left Column: Data Input */}
-              <div className="lg:col-span-5 bg-slate-900 border border-slate-800 rounded-2xl p-5 flex flex-col justify-between space-y-4">
-                <div>
-                  <div className="flex items-center justify-between mb-3">
-                    <h2 className="text-sm font-semibold text-slate-200 flex items-center gap-2">
-                      <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
-                      1. Load NIN List (Excel / CSV / Text)
-                    </h2>
-                    <button
-                      type="button"
-                      onClick={handleLoadSampleBatch}
-                      className="text-xs text-emerald-400 hover:text-emerald-300 flex items-center gap-1 font-medium hover:underline"
-                    >
-                      <Sparkles className="w-3.5 h-3.5" />
-                      Load Demo Sample
-                    </button>
-                  </div>
-
-                  {/* Drag-and-drop or File Input */}
-                  <label className="border-2 border-dashed border-slate-700 hover:border-emerald-500/60 bg-slate-950/60 hover:bg-slate-950 transition-all rounded-xl p-4 flex flex-col items-center justify-center cursor-pointer group text-center mb-3">
+                <div className="flex items-center gap-2 text-xs">
+                  <label className="flex items-center gap-1.5 cursor-pointer text-slate-300 hover:text-white">
                     <input
-                      type="file"
-                      accept=".xlsx,.xls,.csv,.txt"
-                      onChange={handleFileUpload}
-                      className="hidden"
+                      type="checkbox"
+                      checked={settings.isDemo}
+                      onChange={(e) => setSettings((s) => ({ ...s, isDemo: e.target.checked }))}
+                      className="rounded border-slate-700 text-emerald-500 focus:ring-emerald-500 bg-slate-950"
                     />
-                    <UploadCloud className="w-7 h-7 text-slate-400 group-hover:text-emerald-400 transition-colors mb-2" />
-                    <p className="text-xs font-medium text-slate-300">
-                      {isUploading
-                        ? 'Parsing spreadsheet...'
-                        : fileName
-                        ? `Loaded: ${fileName}`
-                        : 'Drop .xlsx, .xls or .csv file here'}
-                    </p>
-                    <p className="text-[11px] text-slate-500 mt-1">
-                      Extracts 11-digit NINs automatically from any column
-                    </p>
+                    <span>Sandbox Demo Mode</span>
                   </label>
-
-                  {/* Raw Textarea input */}
-                  <div>
-                    <label className="block text-xs font-medium text-slate-400 mb-1.5 flex justify-between items-center">
-                      <span className="flex items-center gap-1.5">
-                        <FileText className="w-3.5 h-3.5 text-slate-400" />
-                        <span>Or paste NINs (one per line or comma-separated):</span>
-                      </span>
-                      <span className="text-emerald-400 font-semibold flex items-center gap-1">
-                        <Fingerprint className="w-3.5 h-3.5" />
-                        {parsedNins.length} valid 11-digit NINs
-                      </span>
-                    </label>
-                    <textarea
-                      value={inputNinsText}
-                      onChange={(e) => {
-                        setInputNinsText(e.target.value);
-                        handleExtractNins(e.target.value);
-                      }}
-                      placeholder="10293847561&#10;29384756102&#10;38475610293..."
-                      rows={5}
-                      className="w-full bg-slate-950 border border-slate-800 focus:border-emerald-500 rounded-xl p-3 text-xs font-mono text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                    />
-                  </div>
-                </div>
-
-                {/* Bot Launch Parameters */}
-                <div className="pt-3 border-t border-slate-800 space-y-3">
-                  <div className="grid grid-cols-2 gap-3 text-xs">
-                    <div>
-                      <span className="text-slate-400 block mb-1">Delay per check:</span>
-                      <div className="flex items-center gap-1.5 bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5">
-                        <Clock className="w-3.5 h-3.5 text-slate-400" />
-                        <input
-                          type="number"
-                          min="500"
-                          max="15000"
-                          step="500"
-                          value={delayMs}
-                          onChange={(e) => setDelayMs(Number(e.target.value))}
-                          className="w-full bg-transparent text-slate-200 focus:outline-none"
-                        />
-                        <span className="text-slate-500 text-[11px]">ms</span>
-                      </div>
-                    </div>
-                    <div>
-                      <span className="text-slate-400 block mb-1">Random Jitter:</span>
-                      <div className="flex items-center gap-1.5 bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5">
-                        <Zap className="w-3.5 h-3.5 text-slate-400" />
-                        <input
-                          type="number"
-                          min="0"
-                          max="5000"
-                          step="250"
-                          value={jitterMs}
-                          onChange={(e) => setJitterMs(Number(e.target.value))}
-                          className="w-full bg-transparent text-slate-200 focus:outline-none"
-                        />
-                        <span className="text-slate-500 text-[11px]">ms</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center justify-between text-xs text-slate-300">
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={autoRetry}
-                        onChange={(e) => setAutoRetry(e.target.checked)}
-                        className="rounded border-slate-700 text-emerald-600 focus:ring-emerald-500 w-4 h-4"
-                      />
-                      <span>Auto-retry on 429 rate limit or gateway timeout</span>
-                    </label>
-                  </div>
-
-                  {/* Mode Indicator & Launch Button */}
-                  <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800 text-xs flex items-center justify-between">
-                    <span className="text-slate-400">Target Environment:</span>
-                    <span className={`font-semibold flex items-center gap-1.5 ${isDemoMode ? 'text-emerald-400' : 'text-amber-400'}`}>
-                      {isDemoMode ? <Sparkles className="w-3.5 h-3.5" /> : <Zap className="w-3.5 h-3.5" />}
-                      {isDemoMode ? 'Sandbox Mode' : 'Live Gateway'}
-                    </span>
-                  </div>
-
-                  {/* Primary Trigger Button */}
-                  <button
-                    onClick={handleStartBot}
-                    disabled={parsedNins.length === 0 || !!(currentJob && currentJob.status === 'running')}
-                    className={`w-full py-3 px-4 ${
-                      isDemoMode
-                        ? 'bg-emerald-600 hover:bg-emerald-500 shadow-emerald-900/30'
-                        : 'bg-amber-600 hover:bg-amber-500 shadow-amber-900/30'
-                    } disabled:opacity-50 text-white font-semibold rounded-xl flex items-center justify-center gap-2 text-sm shadow-lg transition-all cursor-pointer disabled:cursor-not-allowed`}
-                  >
-                    <Play className="w-4 h-4 fill-current" />
-                    <span>Launch Autonomous Bot ({isDemoMode ? 'Sandbox' : 'Live'})</span>
-                  </button>
                 </div>
               </div>
 
-              {/* Right Column: Bot Live Telemetry & Control Center */}
-              <div className="lg:col-span-7 bg-slate-900 border border-slate-800 rounded-2xl p-5 flex flex-col justify-between">
-                <div className="space-y-4">
-                  {/* Controls Toolbar */}
-                  <div className="flex items-center justify-between border-b border-slate-800 pb-3 flex-wrap gap-2">
-                    <div className="flex items-center gap-2">
-                      <h2 className="text-sm font-semibold text-slate-200 flex items-center gap-2">
-                        <Zap className="w-4 h-4 text-emerald-400" />
-                        2. Live Bot Operations
-                      </h2>
-                      {currentJob?.inFlight?.[0] && (
-                        <span className="text-xs bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-md flex items-center gap-1.5 font-mono">
-                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping"></span>
-                          Checking: {currentJob.inFlight[0]}
-                        </span>
-                      )}
-                    </div>
-
-                    <div className="flex items-center gap-2">
-                      {currentJob?.status === 'running' && (
-                        <button
-                          onClick={handlePauseBot}
-                          className="px-3 py-1.5 bg-amber-600/20 hover:bg-amber-600/30 text-amber-300 border border-amber-600/40 rounded-lg text-xs font-medium flex items-center gap-1 transition-all"
-                        >
-                          <Pause className="w-3.5 h-3.5" />
-                          Pause
-                        </button>
-                      )}
-                      {currentJob?.status === 'paused' && (
-                        <button
-                          onClick={handleResumeBot}
-                          className="px-3 py-1.5 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-600/40 rounded-lg text-xs font-medium flex items-center gap-1 transition-all"
-                        >
-                          <Play className="w-3.5 h-3.5" />
-                          Resume
-                        </button>
-                      )}
-                      {currentJob && (currentJob.status === 'running' || currentJob.status === 'paused') && (
-                        <button
-                          onClick={handleStopBot}
-                          className="px-3 py-1.5 bg-red-600/20 hover:bg-red-600/30 text-red-300 border border-red-600/40 rounded-lg text-xs font-medium flex items-center gap-1 transition-all"
-                        >
-                          <Square className="w-3.5 h-3.5" />
-                          Stop
-                        </button>
-                      )}
-                      {currentJob && currentJob.stats.failed > 0 && currentJob.status !== 'running' && (
-                        <button
-                          onClick={handleRetryFailed}
-                          className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-lg text-xs font-medium flex items-center gap-1 transition-all"
-                        >
-                          <RotateCcw className="w-3.5 h-3.5" />
-                          Retry Failed ({currentJob.stats.failed})
-                        </button>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Progress Bar & Real-time Metrics */}
-                  <div>
-                    <div className="flex items-center justify-between text-xs text-slate-400 mb-1.5">
-                      <span>Progress ({progressPct}%)</span>
-                      <span>
-                        {processed} of {total} completed ({remaining} queued)
-                      </span>
-                    </div>
-                    <div className="w-full bg-slate-950 rounded-full h-3 overflow-hidden border border-slate-800 p-0.5">
-                      <div
-                        className="bg-gradient-to-r from-emerald-500 via-green-500 to-teal-400 h-full rounded-full transition-all duration-300"
-                        style={{ width: `${progressPct}%` }}
-                      />
-                    </div>
-                  </div>
-
-                  {/* 4 Metrics Cards */}
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                    <div className="bg-slate-950 border border-slate-800/80 rounded-xl p-3 flex flex-col justify-between">
-                      <div className="flex items-center justify-between text-slate-400 mb-1">
-                        <span className="text-[11px] font-medium">Total NINs</span>
-                        <div className="p-1 rounded-lg bg-slate-900 text-slate-400 border border-slate-800">
-                          <Layers className="w-3.5 h-3.5" />
-                        </div>
-                      </div>
-                      <span className="text-xl font-bold text-white tracking-tight">{total}</span>
-                    </div>
-
-                    <div className="bg-slate-950 border border-slate-800/80 rounded-xl p-3 flex flex-col justify-between">
-                      <div className="flex items-center justify-between text-emerald-400 mb-1">
-                        <span className="text-[11px] font-medium">Verified OK</span>
-                        <div className="p-1 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
-                          <CheckCircle2 className="w-3.5 h-3.5" />
-                        </div>
-                      </div>
-                      <span className="text-xl font-bold text-emerald-400 tracking-tight">
-                        {currentJob?.stats.success || 0}
-                      </span>
-                    </div>
-
-                    <div className="bg-slate-950 border border-slate-800/80 rounded-xl p-3 flex flex-col justify-between">
-                      <div className="flex items-center justify-between text-red-400 mb-1">
-                        <span className="text-[11px] font-medium">Not Found / Err</span>
-                        <div className="p-1 rounded-lg bg-red-500/10 text-red-400 border border-red-500/30">
-                          <XCircle className="w-3.5 h-3.5" />
-                        </div>
-                      </div>
-                      <span className="text-xl font-bold text-red-400 tracking-tight">
-                        {currentJob?.stats.failed || 0}
-                      </span>
-                    </div>
-
-                    <div className="bg-slate-950 border border-slate-800/80 rounded-xl p-3 flex flex-col justify-between">
-                      <div className="flex items-center justify-between text-slate-400 mb-1">
-                        <span className="text-[11px] font-medium">Est. Remaining</span>
-                        <div className="p-1 rounded-lg bg-blue-500/10 text-blue-400 border border-blue-500/30">
-                          <Timer className="w-3.5 h-3.5" />
-                        </div>
-                      </div>
-                      <span className="text-lg font-bold text-slate-300 tracking-tight">
-                        {currentJob?.status === 'running' && etaSeconds > 0
-                          ? etaSeconds > 60
-                            ? `${Math.floor(etaSeconds / 60)}m ${etaSeconds % 60}s`
-                            : `${etaSeconds}s`
-                          : currentJob?.status === 'completed'
-                          ? 'Done'
-                          : '--'}
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Browser CORS & 405 Error Diagnostic Alert Card */}
-                  {(Boolean(currentJob?.results?.some(r => r.isCorsBlocked || r.message?.includes('CORS') || r.message?.includes('405'))) || 
-                    (typeof window !== 'undefined' && window.location.hostname.includes('github.io') && !proxyUrl && !isExtensionConnected && !isDemoMode)) && (
-                    <div className="p-4 bg-gradient-to-r from-red-950/70 via-slate-900 to-amber-950/70 border-2 border-red-500/50 rounded-xl space-y-3 shadow-xl">
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="flex items-start gap-2.5">
-                          <ShieldAlert className="w-5 h-5 text-red-400 shrink-0 mt-0.5 animate-pulse" />
-                          <div>
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <h4 className="text-xs font-bold text-red-300">
-                                Browser CORS Restriction on elight2026.github.io
-                              </h4>
-                              <span className="text-[10px] bg-red-500/20 text-red-300 border border-red-500/40 px-2 py-0.5 rounded-full font-semibold">
-                                Solution Ready
-                              </span>
-                            </div>
-                            <p className="text-[11px] text-slate-300 mt-1 leading-relaxed">
-                              Modern web browsers block static websites (like GitHub Pages) from making direct cross-origin API calls to <code className="text-red-200 font-mono">service-gateway.bsg.com.ng</code>. Also, relative path <code className="text-amber-300 font-mono">/api/verify</code> causes <strong>HTTP 405 Method Not Allowed</strong> on GitHub Pages because static hosts have no backend server.
-                            </p>
-                          </div>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => setShowCorsModal(true)}
-                          className="px-3.5 py-1.5 bg-red-600 hover:bg-red-500 text-white rounded-lg text-xs font-bold cursor-pointer shrink-0 shadow transition-all"
-                        >
-                          View Fix Guide →
-                        </button>
-                      </div>
-
-                      {/* 3 Direct Fix Action Buttons */}
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1 text-xs">
-                        <button
-                          type="button"
-                          onClick={() => downloadExtensionZip()}
-                          className="flex items-center justify-center gap-1.5 p-2 bg-emerald-950/90 hover:bg-emerald-900 border border-emerald-500/50 text-emerald-300 rounded-lg font-semibold cursor-pointer shadow text-[11px] transition-all"
-                          title="Download Manifest V3 Chrome Extension to eliminate CORS completely with zero servers"
-                        >
-                          <Download className="w-3.5 h-3.5 text-emerald-400" />
-                          <span>1. Download Extension (.zip)</span>
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => setShowProxyHub(true)}
-                          className="flex items-center justify-center gap-1.5 p-2 bg-purple-950/90 hover:bg-purple-900 border border-purple-500/50 text-purple-300 rounded-lg font-semibold cursor-pointer shadow text-[11px] transition-all"
-                          title="Deploy free server-side proxy to Render.com or Vercel (bypasses browser CORS)"
-                        >
-                          <Server className="w-3.5 h-3.5 text-purple-400" />
-                          <span>2. Deploy Server Proxy</span>
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setIsDemoMode(true);
-                            showToast('Switched to Sandbox Demo Mode. You can simulate all 242 NINs with realistic taxpayer data!', 'success');
-                          }}
-                          className="flex items-center justify-center gap-1.5 p-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 rounded-lg font-semibold cursor-pointer shadow text-[11px] transition-all"
-                          title="Switch to Sandbox Demo to simulate all verifications and export to Excel"
-                        >
-                          <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-                          <span>3. Sandbox Demo Mode</span>
-                        </button>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Live Bot Execution Log Terminal */}
-                  <div className="border border-slate-800 bg-slate-950 rounded-xl p-3">
-                    <div className="flex items-center justify-between text-xs pb-2 mb-2 border-b border-slate-800/80 text-slate-400">
-                      <div className="flex items-center gap-1.5">
-                        <Terminal className="w-3.5 h-3.5 text-emerald-400" />
-                        <span className="font-semibold text-slate-300">Autonomous Worker Terminal</span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={() => setLogFilter(logFilter === 'all' ? 'error' : 'all')}
-                          className="hover:text-slate-200 text-[11px] flex items-center gap-1 bg-slate-900 hover:bg-slate-800 px-2 py-0.5 rounded-lg border border-slate-800 transition-colors cursor-pointer"
-                        >
-                          <Filter className="w-3 h-3 text-slate-400" />
-                          <span>{logFilter === 'all' ? 'Filter Errors' : 'Show All'}</span>
-                        </button>
-                        <span className="text-[11px] bg-slate-800 px-1.5 py-0.5 rounded text-slate-400 flex items-center gap-1">
-                          <Activity className="w-3 h-3 text-slate-400" />
-                          <span>{currentJob?.logs?.length || 0} logs</span>
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="h-44 overflow-y-auto space-y-1 text-xs font-mono pr-1 select-text">
-                      {filteredLogs.length === 0 ? (
-                        <div className="text-slate-600 py-6 text-center italic">
-                          Bot idle. Awaiting batch launch or input.
-                        </div>
-                      ) : (
-                        filteredLogs.map((log) => (
-                          <div key={log.id} className="flex items-start gap-2 leading-relaxed">
-                            <span className="text-slate-600 text-[10px] shrink-0 pt-0.5">
-                              {new Date(log.timestamp).toLocaleTimeString()}
-                            </span>
-                            <span
-                              className={`text-[11px] ${
-                                log.level === 'success'
-                                  ? 'text-emerald-400'
-                                  : log.level === 'error'
-                                  ? 'text-red-400'
-                                  : log.level === 'warn'
-                                  ? 'text-amber-400'
-                                  : 'text-slate-300'
-                              }`}
-                            >
-                              {log.message}
-                            </span>
-                          </div>
-                        ))
-                      )}
-                      <div ref={terminalEndRef} />
-                    </div>
-                  </div>
-                </div>
-
-                {/* Export Bar */}
-                <div className="pt-3 border-t border-slate-800 mt-4 flex items-center justify-between flex-wrap gap-3">
-                  <div className="flex items-center gap-2 text-xs text-slate-400">
-                    <TrendingUp className="w-4 h-4 text-emerald-400" />
-                    <span>Rate: ~{throughputPerMin} NINs/min • Non-blocking server worker</span>
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => handleDownloadExport('xlsx', 'all')}
-                      className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 shadow transition-all cursor-pointer"
-                    >
-                      <FileSpreadsheet className="w-3.5 h-3.5" />
-                      <span>Export Excel (.xlsx)</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleDownloadExport('csv', 'success')}
-                      className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-medium flex items-center gap-1.5 transition-all cursor-pointer"
-                    >
-                      <FileText className="w-3.5 h-3.5 text-slate-400" />
-                      <span>CSV (Success)</span>
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Verification Results Table */}
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
-              <div className="flex flex-wrap items-center justify-between gap-4">
-                <div className="flex items-center gap-2">
-                  <h3 className="text-base font-bold text-slate-100 flex items-center gap-2">
-                    <Database className="w-4 h-4 text-emerald-400" />
-                    <span>Verified Taxpayer Records</span>
-                  </h3>
-                  <span className="text-xs bg-slate-800 text-slate-300 px-2 py-0.5 rounded-full font-mono">
-                    {filteredResults.length} records
-                  </span>
-                </div>
-
-                <div className="flex items-center gap-2 flex-wrap">
-                  {/* Filter tabs */}
-                  <div className="bg-slate-950 p-1 rounded-xl border border-slate-800 flex items-center text-xs">
-                    <button
-                      onClick={() => setResultFilter('all')}
-                      className={`px-3 py-1 rounded-lg transition-all flex items-center gap-1.5 ${
-                        resultFilter === 'all' ? 'bg-slate-800 text-white font-medium' : 'text-slate-400'
-                      }`}
-                    >
-                      <ListFilter className="w-3.5 h-3.5" />
-                      <span>All ({currentJob?.results?.length || 0})</span>
-                    </button>
-                    <button
-                      onClick={() => setResultFilter('success')}
-                      className={`px-3 py-1 rounded-lg transition-all flex items-center gap-1.5 ${
-                        resultFilter === 'success'
-                          ? 'bg-emerald-600/30 text-emerald-300 font-medium'
-                          : 'text-slate-400'
-                      }`}
-                    >
-                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                      <span>Success ({currentJob?.stats?.success || 0})</span>
-                    </button>
-                    <button
-                      onClick={() => setResultFilter('failed')}
-                      className={`px-3 py-1 rounded-lg transition-all flex items-center gap-1.5 ${
-                        resultFilter === 'failed' ? 'bg-red-600/30 text-red-300 font-medium' : 'text-slate-400'
-                      }`}
-                    >
-                      <XCircle className="w-3.5 h-3.5 text-red-400" />
-                      <span>Failed ({currentJob?.stats?.failed || 0})</span>
-                    </button>
-                  </div>
-
-                  {/* Search bar */}
-                  <div className="relative">
-                    <Search className="w-3.5 h-3.5 absolute left-3 top-2.5 text-slate-400" />
-                    <input
-                      type="text"
-                      placeholder="Search results..."
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                      className="bg-slate-950 border border-slate-800 text-xs rounded-xl pl-8 pr-3 py-2 text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-500 w-48"
-                    />
-                  </div>
-                </div>
-              </div>
-
-              {/* Table */}
-              <div className="overflow-x-auto rounded-xl border border-slate-800">
-                <table className="w-full text-left text-xs border-collapse">
-                  <thead>
-                    <tr className="bg-slate-950/80 text-slate-400 font-semibold border-b border-slate-800">
-                      <th className="py-3 px-4">
-                        <span className="flex items-center gap-1.5">
-                          <Fingerprint className="w-3.5 h-3.5 text-slate-500" />
-                          <span>NIN</span>
-                        </span>
-                      </th>
-                      <th className="py-3 px-4">
-                        <span className="flex items-center gap-1.5">
-                          <ShieldCheck className="w-3.5 h-3.5 text-slate-500" />
-                          <span>Status</span>
-                        </span>
-                      </th>
-                      <th className="py-3 px-4">
-                        <span className="flex items-center gap-1.5">
-                          <UserCheck className="w-3.5 h-3.5 text-slate-500" />
-                          <span>Full Name</span>
-                        </span>
-                      </th>
-                      <th className="py-3 px-4">
-                        <span className="flex items-center gap-1.5">
-                          <Phone className="w-3.5 h-3.5 text-slate-500" />
-                          <span>Mobile</span>
-                        </span>
-                      </th>
-                      <th className="py-3 px-4">
-                        <span className="flex items-center gap-1.5">
-                          <Calendar className="w-3.5 h-3.5 text-slate-500" />
-                          <span>DOB / Gender</span>
-                        </span>
-                      </th>
-                      <th className="py-3 px-4">
-                        <span className="flex items-center gap-1.5">
-                          <MessageSquare className="w-3.5 h-3.5 text-slate-500" />
-                          <span>Portal Message</span>
-                        </span>
-                      </th>
-                      <th className="py-3 px-4 text-right">Action</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-800/60 font-mono">
-                    {filteredResults.length === 0 ? (
-                      <tr>
-                        <td colSpan={7} className="py-8 text-center text-slate-500 font-sans italic">
-                          No records match the current filter.
-                        </td>
-                      </tr>
-                    ) : (
-                      filteredResults.map((r) => {
-                        const d = (r && r.details && typeof r.details === 'object') ? r.details : {};
-                        const fullName = [
-                          d['First Name'] || d.firstName,
-                          d['Middle Name'] || d.middleName,
-                          d['Surname'] || d.surname
-                        ].filter(Boolean).join(' ') || (r.status === 'success' ? 'Verified' : '—');
-
-                        const phone = d['Mobile'] || d.mobile || d.telephoneno || '—';
-                        const dob = d['Date of Birth'] || d.birthdate || d.dateOfBirth || '';
-                        const gender = d['Gender'] || d.gender || '';
-
-                        return (
-                          <tr key={r.nin} className="hover:bg-slate-800/30 transition-colors">
-                            <td className="py-2.5 px-4 font-semibold text-slate-100">{r.nin}</td>
-                            <td className="py-2.5 px-4 font-sans">
-                              {r.status === 'success' ? (
-                                <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-400 bg-emerald-500/10 border border-emerald-500/30 px-2 py-0.5 rounded-full">
-                                  <CheckCircle2 className="w-3 h-3" />
-                                  <span>{r.isDemoSimulation ? 'Verified (Demo)' : 'Verified'}</span>
-                                </span>
-                              ) : (
-                                <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-red-400 bg-red-500/10 border border-red-500/30 px-2 py-0.5 rounded-full">
-                                  <XCircle className="w-3 h-3" />
-                                  Failed
-                                </span>
-                              )}
-                            </td>
-                            <td className="py-2.5 px-4 font-sans text-slate-200">{fullName}</td>
-                            <td className="py-2.5 px-4 text-slate-300">{phone}</td>
-                            <td className="py-2.5 px-4 font-sans text-slate-400">
-                              {dob ? `${dob} ${gender ? `(${gender})` : ''}` : '—'}
-                            </td>
-                            <td className="py-2.5 px-4 font-sans text-slate-400 truncate max-w-xs">
-                              {r.message}
-                            </td>
-                            <td className="py-2.5 px-4 text-right">
-                              <div className="flex items-center justify-end gap-1.5">
-                                <button
-                                  onClick={() => setSelectedResult(r)}
-                                  className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-lg text-xs font-sans flex items-center gap-1 cursor-pointer"
-                                >
-                                  <Eye className="w-3 h-3" />
-                                  Details
-                                </button>
-                                <a
-                                  href={BIRS_DIRECT_PORTAL_URL}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  onClick={() => {
-                                    navigator.clipboard?.writeText(r.nin);
-                                    showToast(`Copied NIN ${r.nin}! Opening official BIRS portal...`, 'info');
-                                  }}
-                                  className="px-2 py-1 bg-emerald-950/60 hover:bg-emerald-900/80 text-emerald-300 border border-emerald-500/30 rounded-lg text-xs font-sans flex items-center gap-1 transition-all"
-                                  title="Copy NIN and open official BIRS taxpayer verification page (No CORS)"
-                                >
-                                  <ExternalLink className="w-3 h-3" />
-                                  <span>BIRS Direct</span>
-                                </a>
-                              </div>
-                            </td>
-                          </tr>
-                        );
-                      })
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Tab 2: Single NIN Instant Lookup */}
-        {activeTab === 'single' && (
-          <div className="max-w-2xl mx-auto space-y-6">
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6">
-              <h2 className="text-lg font-bold text-white mb-1 flex items-center gap-2">
-                <Search className="w-5 h-5 text-emerald-400" />
-                Instant Single NIN Lookup
-              </h2>
-              <p className="text-xs text-slate-400 mb-6">
-                Query the live BIRS identity validation portal directly for individual taxpayer lookup and verification.
-              </p>
-
-              {/* Mode status & Connection Indicators */}
-              <div className="space-y-2 mb-4">
-                <div className="flex items-center justify-between flex-wrap gap-2 p-3 bg-slate-950 rounded-xl border border-slate-800 text-xs">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-slate-400">Mode:</span>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const next = !isDemoMode;
-                        setIsDemoMode(next);
-                        showToast(`Switched to ${next ? 'Simulated Sandbox Mode' : 'Live Gateway (Real Verification)'}`, 'info');
-                      }}
-                      className={`font-semibold flex items-center gap-1.5 cursor-pointer px-2.5 py-1 rounded-lg border transition-all ${
-                        !isDemoMode
-                          ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30 hover:bg-emerald-500/20'
-                          : 'text-amber-400 bg-amber-500/10 border-amber-500/30 hover:bg-amber-500/20'
-                      }`}
-                      title="Click to toggle between Live Gateway and Simulated Demo Sandbox"
-                    >
-                      {!isDemoMode ? <Zap className="w-3.5 h-3.5 text-emerald-400" /> : <Sparkles className="w-3.5 h-3.5 text-amber-400" />}
-                      <span>{!isDemoMode ? 'Live Gateway (Real Verification)' : 'Simulated Sandbox (Test Data)'}</span>
-                    </button>
-
-                    {/* Connection Status Badge */}
-                    {isExtensionConnected ? (
-                      <span className="text-[11px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 px-2 py-0.5 rounded-full font-semibold flex items-center gap-1">
-                        <Puzzle className="w-3 h-3 text-emerald-400" />
-                        <span>Chrome Extension Connected (No CORS)</span>
-                      </span>
-                    ) : proxyUrl ? (
-                      <span className="text-[11px] bg-blue-500/20 text-blue-300 border border-blue-500/40 px-2 py-0.5 rounded-full font-semibold flex items-center gap-1">
-                        <Server className="w-3 h-3 text-blue-400" />
-                        <span>Relay Proxy Active</span>
-                      </span>
-                    ) : isServerAvailable ? (
-                      <span className="text-[11px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 px-2 py-0.5 rounded-full font-semibold flex items-center gap-1">
-                        <Server className="w-3 h-3 text-emerald-400" />
-                        <span>Backend Server Connected</span>
-                      </span>
-                    ) : (
-                      <span className="text-[11px] bg-slate-800 text-slate-400 border border-slate-700 px-2 py-0.5 rounded-full font-medium flex items-center gap-1">
-                        <Globe className="w-3 h-3 text-slate-400" />
-                        <span>Direct Browser Gateway</span>
-                      </span>
-                    )}
-                  </div>
-
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-slate-500 text-[11px]">NIN Samples:</span>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSingleNin('10293847561');
-                        showToast('Filled NIN 10293847561', 'info');
-                      }}
-                      className="px-2 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-[11px] font-mono cursor-pointer"
-                    >
-                      10293847561
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSingleNin('29384756102');
-                        showToast('Filled NIN 29384756102', 'info');
-                      }}
-                      className="px-2 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-[11px] font-mono cursor-pointer"
-                    >
-                      29384756102
-                    </button>
-                  </div>
-                </div>
-
-                {!isDemoMode && !isServerAvailable && !proxyUrl && !isExtensionConnected && (typeof window !== 'undefined' && window.location.hostname.includes('github.io')) && (
-                  <div className="text-[11px] text-amber-300 bg-amber-950/40 border border-amber-500/30 p-2.5 rounded-xl flex items-start gap-2">
-                    <ShieldAlert className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
-                    <span className="leading-relaxed">
-                      <strong>Direct Gateway Connection:</strong> Modern web browsers restrict direct cross-origin calls from static hosting (github.io) to the official BIRS Gateway. If your browser blocks the request, <strong>no fake data will be generated</strong>. You can install the Chrome Extension v2.2, run the desktop bot, or enter a Relay Proxy URL in Settings.
-                    </span>
-                  </div>
-                )}
-              </div>
-
-              <form onSubmit={handleVerifySingle} className="space-y-4">
-                <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1.5 flex items-center gap-1.5">
-                    <Fingerprint className="w-3.5 h-3.5 text-emerald-400" />
-                    <span>National Identification Number (11 digits):</span>
-                  </label>
+              {/* Input Row */}
+              <div className="flex flex-col sm:flex-row gap-3">
+                <div className="relative flex-1">
                   <input
                     type="text"
                     maxLength={11}
                     value={singleNin}
-                    onChange={(e) => setSingleNin(e.target.value.replace(/\D/g, ''))}
-                    placeholder="Enter 11-digit NIN (e.g. 10293847561)"
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm font-mono text-white focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500"
-                  />
-                </div>
-
-                <div className="flex flex-col sm:flex-row gap-2">
-                  <button
-                    type="submit"
-                    disabled={singleLoading || singleNin.length !== 11}
-                    className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-500 shadow-emerald-900/30 disabled:opacity-50 text-white font-semibold rounded-xl text-sm flex items-center justify-center gap-2 shadow-lg transition-all cursor-pointer disabled:cursor-not-allowed"
-                  >
-                    {singleLoading ? (
-                      <>
-                        <RefreshCw className="w-4 h-4 animate-spin" />
-                        <span>Validating against BIRS Gateway...</span>
-                      </>
-                    ) : (
-                      <>
-                        <CheckCircle2 className="w-4 h-4" />
-                        <span>Verify NIN ({isDemoMode ? 'Simulated Sandbox' : 'Real Live Gateway'})</span>
-                      </>
-                    )}
-                  </button>
-
-                  <a
-                    href={BIRS_DIRECT_PORTAL_URL}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    onClick={() => {
-                      if (singleNin.length === 11) {
-                        navigator.clipboard?.writeText(singleNin);
-                        showToast(`Copied NIN ${singleNin}! Opening official BIRS portal...`, 'info');
-                      } else {
-                        showToast('Opening official BIRS portal...', 'info');
+                    onChange={(e) => setSingleNin(e.target.value.replace(/\D/g, '').slice(0, 11))}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !isVerifyingSingle && singleNin.length === 11) {
+                        handleVerifySingle();
                       }
                     }}
-                    className="py-3 px-4 bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-slate-700 hover:border-emerald-500/40 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer shrink-0"
-                    title="Open official Benue State Internal Revenue Service page directly without CORS restrictions"
-                  >
-                    <Building2 className="w-4 h-4 text-emerald-400" />
-                    <span>Open Direct BIRS Page</span>
-                    <ExternalLink className="w-3.5 h-3.5 text-slate-400" />
-                  </a>
-                </div>
-
-                <div className="flex items-center justify-between text-[11px] text-slate-400 px-1 pt-0.5">
-                  <span className="flex items-center gap-1">
-                    <Globe className="w-3.5 h-3.5 text-slate-500" />
-                    <span>Official Verification Page (No CORS):</span>
-                  </span>
-                  <a
-                    href={BIRS_DIRECT_PORTAL_URL}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-emerald-400 hover:text-emerald-300 font-mono underline flex items-center gap-1"
-                  >
-                    <span>birs.be.gov.ng/taxpayer-information</span>
-                    <ExternalLink className="w-3 h-3" />
-                  </a>
-                </div>
-              </form>
-
-              {singleResult && (
-                <div className={`mt-6 p-5 rounded-xl border ${
-                  singleResult.status === 'success'
-                    ? 'bg-emerald-950/20 border-emerald-500/40'
-                    : 'bg-red-950/20 border-red-500/40'
-                }`}>
-                  <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
-                    <div className="flex items-center gap-2">
-                      {singleResult.status === 'success' ? (
-                        <CheckCircle2 className="w-5 h-5 text-emerald-400" />
-                      ) : (
-                        <XCircle className="w-5 h-5 text-red-400" />
-                      )}
-                      <h3 className={`text-sm font-bold ${
-                        singleResult.status === 'success' ? 'text-emerald-400' : 'text-red-400'
-                      }`}>
-                        {singleResult.status === 'success' ? 'NIN Verified Successfully' : 'Verification Failed'}
-                      </h3>
-                    </div>
-                    {singleResult.isDemoSimulation ? (
-                      <span className="text-[10px] bg-amber-500/20 text-amber-300 border border-amber-500/40 px-2 py-0.5 rounded-full font-semibold flex items-center gap-1">
-                        <Sparkles className="w-3 h-3 text-amber-400" />
-                        <span>Simulated Sandbox</span>
-                      </span>
-                    ) : (
-                      <span className="text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 px-2 py-0.5 rounded-full font-semibold flex items-center gap-1">
-                        <BadgeCheck className="w-3 h-3 text-emerald-400" />
-                        <span>{singleResult.source || 'Live BIRS Gateway'}</span>
-                      </span>
+                    placeholder="Enter 11-digit National Identification Number (e.g. 10293847561)"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm font-mono text-white placeholder:text-slate-600 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 tracking-wider"
+                  />
+                  <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-2">
+                    <span className={`text-[11px] font-mono ${
+                      singleNin.length === 11 ? 'text-emerald-400 font-bold' : 'text-slate-500'
+                    }`}>
+                      {singleNin.length}/11
+                    </span>
+                    {singleNin && (
+                      <button
+                        onClick={() => setSingleNin('')}
+                        className="text-slate-500 hover:text-slate-300 p-0.5"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
                     )}
                   </div>
+                </div>
 
-                  <p className="text-xs text-slate-300 mb-3">{singleResult.message}</p>
-
-                  {/* Browser CORS Block Action Hub */}
-                  {singleResult.isCorsBlocked && (
-                    <div className="mt-3 p-4 bg-amber-950/40 border border-amber-500/40 rounded-xl space-y-3">
-                      <div className="flex items-start gap-2.5">
-                        <ShieldAlert className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
-                        <div>
-                          <h4 className="text-xs font-bold text-amber-300">Browser CORS Restriction on Static Hosting</h4>
-                          <p className="text-[11px] text-slate-300 mt-1 leading-relaxed">
-                            Your browser blocked direct connection from this static webpage to the Nigerian BIRS identity gateway (<code>service-gateway.bsg.com.ng</code>). <strong>No fake data was generated.</strong>
-                          </p>
-                        </div>
-                      </div>
-
-                      {/* Direct BIRS Portal Action Banner */}
-                      <div className="p-3.5 bg-gradient-to-r from-emerald-950/90 via-slate-900 to-slate-950 border-2 border-emerald-500/60 rounded-xl space-y-2.5 shadow-lg">
-                        <div className="flex items-center justify-between">
-                          <span className="text-xs font-bold text-emerald-300 flex items-center gap-1.5">
-                            <Building2 className="w-4 h-4 text-emerald-400" />
-                            Direct Solution: Official BIRS Portal Page
-                          </span>
-                          <span className="text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 px-2 py-0.5 rounded-full font-semibold">
-                            100% Genuine • No CORS
-                          </span>
-                        </div>
-                        <p className="text-[11px] text-slate-200 leading-relaxed">
-                          To avoid this browser CORS block entirely, open the official Benue State Internal Revenue Service verification page directly:
-                        </p>
-                        <div className="flex items-center gap-2 bg-slate-950/90 p-2 rounded-lg border border-slate-800">
-                          <Globe className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                          <a
-                            href={BIRS_DIRECT_PORTAL_URL}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-xs font-mono text-emerald-400 hover:text-emerald-300 underline font-semibold flex items-center gap-1 break-all"
-                          >
-                            <span>{BIRS_DIRECT_PORTAL_URL}</span>
-                            <ExternalLink className="w-3 h-3 shrink-0" />
-                          </a>
-                        </div>
-                        <div className="flex flex-wrap gap-2 pt-1">
-                          <a
-                            href={BIRS_DIRECT_PORTAL_URL}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            onClick={() => {
-                              if (singleResult?.nin) {
-                                navigator.clipboard?.writeText(singleResult.nin);
-                                showToast(`Copied NIN ${singleResult.nin} to clipboard! Opening official BIRS portal...`, 'success');
-                              }
-                            }}
-                            className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 shadow transition-all cursor-pointer"
-                          >
-                            <Copy className="w-3.5 h-3.5" />
-                            <span>Copy NIN ({singleResult.nin}) &amp; Open BIRS Portal</span>
-                            <ExternalLink className="w-3.5 h-3.5" />
-                          </a>
-                          <a
-                            href={BIRS_DIRECT_PORTAL_URL}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-all"
-                          >
-                            <ExternalLink className="w-3.5 h-3.5 text-slate-400" />
-                            <span>Open Direct Page</span>
-                          </a>
-                        </div>
-                      </div>
-
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1">
-                        <button
-                          type="button"
-                          onClick={() => downloadExtensionZip()}
-                          className="p-2.5 bg-emerald-600/30 hover:bg-emerald-600/50 border border-emerald-500/40 text-emerald-300 rounded-lg text-left text-xs transition-all flex flex-col justify-between cursor-pointer"
-                        >
-                          <span className="font-semibold flex items-center gap-1">
-                            <Puzzle className="w-3.5 h-3.5" /> Chrome Extension
-                          </span>
-                          <span className="text-[10px] text-emerald-400/80 mt-1">Bypasses browser CORS natively.</span>
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => downloadPythonBotScript()}
-                          className="p-2.5 bg-blue-600/30 hover:bg-blue-600/50 border border-blue-500/40 text-blue-300 rounded-lg text-left text-xs transition-all flex flex-col justify-between cursor-pointer"
-                        >
-                          <span className="font-semibold flex items-center gap-1">
-                            <FileCode className="w-3.5 h-3.5" /> Desktop Python Bot
-                          </span>
-                          <span className="text-[10px] text-blue-400/80 mt-1">Direct terminal socket access.</span>
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => setShowProxyHub(true)}
-                          className="p-2.5 bg-purple-600/30 hover:bg-purple-600/50 border border-purple-500/40 text-purple-300 rounded-lg text-left text-xs transition-all flex flex-col justify-between cursor-pointer"
-                        >
-                          <span className="font-semibold flex items-center gap-1">
-                            <Server className="w-3.5 h-3.5" /> Server Proxy Hub
-                          </span>
-                          <span className="text-[10px] text-purple-400/80 mt-1">Render, Vercel, Node, Python, Go guides.</span>
-                        </button>
-                      </div>
-
-                      {/* Inline Quick Proxy Config */}
-                      <div className="pt-2 border-t border-amber-500/20 flex items-center gap-2">
-                        <input
-                          type="text"
-                          placeholder="Server Proxy URL (e.g. https://my-proxy.onrender.com or http://localhost:3000)..."
-                          value={proxyUrl}
-                          onChange={(e) => {
-                            setProxyUrl(e.target.value);
-                            localStorage.setItem('birs_proxy_url', e.target.value);
-                          }}
-                          className="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-[11px] font-mono text-slate-200 focus:outline-none focus:border-purple-400"
-                        />
-                        <button
-                          type="button"
-                          disabled={proxyTesting}
-                          onClick={() => handleTestProxy()}
-                          className="px-3 py-1.5 bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white rounded-lg text-xs font-semibold whitespace-nowrap cursor-pointer shadow transition-all"
-                        >
-                          {proxyTesting ? 'Testing...' : 'Test & Save'}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (!proxyUrl) {
-                              showToast('Enter a proxy URL first', 'error');
-                              return;
-                            }
-                            showToast('Retrying verification via server proxy...', 'info');
-                            handleVerifySingle(new Event('submit') as any);
-                          }}
-                          className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold whitespace-nowrap cursor-pointer shadow transition-all"
-                        >
-                          Verify Now
-                        </button>
-                      </div>
-                    </div>
+                <button
+                  onClick={() => handleVerifySingle()}
+                  disabled={isVerifyingSingle || singleNin.length !== 11}
+                  className="inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-sm shadow-lg shadow-emerald-900/30 transition-all disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer shrink-0"
+                >
+                  {isVerifyingSingle ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin text-white" />
+                      <span>Querying Gateway...</span>
+                    </>
+                  ) : (
+                    <>
+                      <BadgeCheck className="w-4 h-4 text-white" />
+                      <span>Verify NIN Now</span>
+                    </>
                   )}
-
-                  {singleResult.details && Object.keys(singleResult.details).length > 0 && (
-                    <div className="space-y-2 bg-slate-950/80 p-3.5 rounded-lg border border-slate-800/80 text-xs">
-                      {Object.entries(singleResult.details).map(([k, v]) => {
-                        const icon =
-                          k.toLowerCase().includes('name') ? <UserCheck className="w-3.5 h-3.5 text-emerald-400" /> :
-                          k.toLowerCase().includes('mobile') || k.toLowerCase().includes('phone') ? <Phone className="w-3.5 h-3.5 text-blue-400" /> :
-                          k.toLowerCase().includes('birth') || k.toLowerCase().includes('dob') ? <Calendar className="w-3.5 h-3.5 text-amber-400" /> :
-                          k.toLowerCase().includes('address') ? <MapPin className="w-3.5 h-3.5 text-rose-400" /> :
-                          k.toLowerCase().includes('origin') || k.toLowerCase().includes('lga') || k.toLowerCase().includes('state') ? <Building2 className="w-3.5 h-3.5 text-purple-400" /> :
-                          <Hash className="w-3.5 h-3.5 text-slate-400" />;
-
-                        return (
-                          <div key={k} className="flex justify-between items-center py-1.5 border-b border-slate-800/40 last:border-0">
-                            <span className="text-slate-400 font-medium flex items-center gap-1.5">
-                              {icon}
-                              <span>{k}:</span>
-                            </span>
-                            <span className="text-slate-200 font-mono text-right max-w-xs break-words">{String(v)}</span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* Tab 3: Standalone Bot & Chrome Extension Package */}
-        {activeTab === 'standalone' && (
-          <div className="max-w-4xl mx-auto space-y-6">
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6">
-              <h2 className="text-lg font-bold text-white mb-2 flex items-center gap-2">
-                <Code2 className="w-5 h-5 text-emerald-400" />
-                Standalone Autonomous Bot Options
-              </h2>
-              <p className="text-xs text-slate-400 mb-6">
-                Run the verification bot completely by itself on any computer, VPS server, or directly in Google Chrome without keeping the web tab active.
-              </p>
-
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-                {/* Card 1: Packaged Chrome Extension V2.1 */}
-                <div className="bg-slate-950 border border-slate-800 rounded-xl p-5 flex flex-col justify-between hover:border-emerald-500/40 transition-all">
-                  <div>
-                    <div className="w-10 h-10 rounded-xl bg-emerald-600/20 text-emerald-400 border border-emerald-500/30 flex items-center justify-center mb-3">
-                      <Puzzle className="w-5 h-5" />
-                    </div>
-                    <h3 className="text-sm font-bold text-white mb-1">
-                      Chrome Extension v2.1
-                    </h3>
-                    <p className="text-xs text-slate-400 mb-4">
-                      Enhanced with background service worker, automatic retry, and no tab reload delays.
-                    </p>
-                    <ul className="text-[11px] text-slate-400 space-y-1.5 mb-4">
-                      <li>✓ Manifest V3 compliant</li>
-                      <li>✓ Runs background alarms &amp; queue</li>
-                      <li>✓ Auto-exports results to Excel</li>
-                    </ul>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      downloadExtensionZip();
-                      showToast('Downloading Chrome Extension .ZIP package...', 'success');
-                    }}
-                    className="w-full py-2.5 px-3 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold rounded-xl flex items-center justify-center gap-1.5 shadow transition-all cursor-pointer"
-                  >
-                    <Download className="w-4 h-4" />
-                    <span>Download Extension .ZIP</span>
-                  </button>
-                </div>
-
-                {/* Card 2: Headless Python Bot */}
-                <div className="bg-slate-950 border border-slate-800 rounded-xl p-5 flex flex-col justify-between hover:border-emerald-500/40 transition-all">
-                  <div>
-                    <div className="w-10 h-10 rounded-xl bg-blue-600/20 text-blue-400 border border-blue-500/30 flex items-center justify-center mb-3">
-                      <FileCode className="w-5 h-5" />
-                    </div>
-                    <h3 className="text-sm font-bold text-white mb-1">
-                      Python Autonomous Bot
-                    </h3>
-                    <p className="text-xs text-slate-400 mb-4">
-                      CLI script with arguments for running headlessly via cron, nohup, or Docker on Linux/Windows.
-                    </p>
-                    <ul className="text-[11px] text-slate-400 space-y-1.5 mb-4">
-                      <li>✓ Reads any .xlsx/.xls/text</li>
-                      <li>✓ Generates multi-sheet Excel report</li>
-                      <li>✓ Custom delay &amp; rate limit controls</li>
-                    </ul>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      downloadPythonBotScript();
-                      showToast('Downloading birs_bot.py...', 'success');
-                    }}
-                    className="w-full py-2.5 px-3 bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold rounded-xl flex items-center justify-center gap-1.5 shadow transition-all cursor-pointer"
-                  >
-                    <Download className="w-4 h-4" />
-                    <span>Download birs_nin_bot.py</span>
-                  </button>
-                </div>
-
-                {/* Card 3: Headless Node.js Bot */}
-                <div className="bg-slate-950 border border-slate-800 rounded-xl p-5 flex flex-col justify-between hover:border-emerald-500/40 transition-all">
-                  <div>
-                    <div className="w-10 h-10 rounded-xl bg-purple-600/20 text-purple-400 border border-purple-500/30 flex items-center justify-center mb-3">
-                      <Terminal className="w-5 h-5" />
-                    </div>
-                    <h3 className="text-sm font-bold text-white mb-1">
-                      Node.js Script (ESM)
-                    </h3>
-                    <p className="text-xs text-slate-400 mb-4">
-                      Pure Node 18+ async script. Direct terminal execution with zero native compile requirements.
-                    </p>
-                    <ul className="text-[11px] text-slate-400 space-y-1.5 mb-4">
-                      <li>✓ Uses standard fetch() API</li>
-                      <li>✓ Includes xlsx parsing &amp; output</li>
-                      <li>✓ Easy process daemonization</li>
-                    </ul>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      downloadNodeBotScript();
-                      showToast('Downloading birs_nin_bot.mjs...', 'success');
-                    }}
-                    className="w-full py-2.5 px-3 bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold rounded-xl flex items-center justify-center gap-1.5 shadow transition-all cursor-pointer"
-                  >
-                    <Download className="w-4 h-4" />
-                    <span>Download birs_nin_bot.mjs</span>
-                  </button>
-                </div>
+                </button>
               </div>
 
-              {/* Terminal Instructions */}
-              <div className="mt-8 pt-6 border-t border-slate-800">
-                <h4 className="text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-                  <Terminal className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>How to run the Python Bot on a server / VPS:</span>
-                </h4>
-                <div className="bg-slate-950 border border-slate-800 rounded-xl p-3.5 text-xs font-mono text-emerald-400 space-y-1">
-                  <p className="text-slate-500"># 1. Install dependencies</p>
-                  <p>pip install requests openpyxl</p>
-                  <p className="text-slate-500 pt-1"># 2. Run the bot with your spreadsheet file</p>
-                  <p>python birs_nin_bot.py --file input_nins.xlsx --output verified_results.xlsx --delay 2.5</p>
-                  <p className="text-slate-500 pt-1"># 3. (Optional) Run 24/7 in the background with nohup</p>
-                  <p>nohup python birs_nin_bot.py --file input_nins.xlsx &gt; bot.log 2&gt;&amp;1 &amp;</p>
-                </div>
-              </div>
-
-              {/* Chrome Extension Instructions */}
-              <div className="mt-6 pt-6 border-t border-slate-800">
-                <h4 className="text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-                  <Layers className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>How to install the Chrome Extension:</span>
-                </h4>
-                <ol className="text-xs text-slate-400 list-decimal list-inside space-y-1.5">
-                  <li>Download the .ZIP file above and extract it into a folder on your computer.</li>
-                  <li>Open Google Chrome and navigate to <code className="text-emerald-400 font-mono">chrome://extensions</code>.</li>
-                  <li>Enable the <b>Developer mode</b> switch in the top right corner.</li>
-                  <li>Click <b>Load unpacked</b> and select the extracted folder.</li>
-                  <li>Open <code className="text-emerald-400 font-mono">https://birs.be.gov.ng/taxpayer-information</code> and click the extension icon to run!</li>
-                </ol>
+              {/* Quick sample pills */}
+              <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400 pt-1">
+                <span className="text-[11px] text-slate-500">Quick Test NINs:</span>
+                {['10293847561', '29384756102', '38475610293'].map((sample) => (
+                  <button
+                    key={sample}
+                    onClick={() => handleVerifySingle(sample)}
+                    className="font-mono text-[11px] px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700/60 transition-colors"
+                  >
+                    {sample}
+                  </button>
+                ))}
               </div>
             </div>
-          </div>
-        )}
 
-        {/* Tab 4: Settings */}
-        {activeTab === 'settings' && (
-          <div className="max-w-2xl mx-auto space-y-6">
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-5">
-              <div>
-                <h2 className="text-lg font-bold text-white mb-1 flex items-center gap-2">
-                  <SlidersHorizontal className="w-5 h-5 text-emerald-400" />
-                  <span>Gateway &amp; Bot Engine Settings</span>
-                </h2>
-                <p className="text-xs text-slate-400">
-                  Configure the merchant authorization credentials and request throttles used by the verification engine.
-                </p>
-              </div>
-
-              <div className="space-y-4 text-xs">
-                <div>
-                  <label className="block text-slate-300 font-medium mb-1.5 flex items-center gap-1.5">
-                    <KeyRound className="w-3.5 h-3.5 text-emerald-400" />
-                    <span>BIRS Portal Merchant Key (X-MERCHANT-KEY):</span>
-                  </label>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="text"
-                      value={merchantKey}
-                      onChange={(e) => setMerchantKey(e.target.value)}
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 font-mono text-slate-200 focus:outline-none focus:border-emerald-500"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => {
-                        navigator.clipboard.writeText(merchantKey);
-                        setCopiedKey(true);
-                        setTimeout(() => setCopiedKey(false), 2000);
-                      }}
-                      className="px-3 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl flex items-center gap-1 border border-slate-700 cursor-pointer"
-                    >
-                      {copiedKey ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                      <span>Copy</span>
-                    </button>
+            {/* Single Lookup Result Card */}
+            {singleResult && (
+              <div className={`border rounded-2xl p-6 shadow-2xl transition-all ${
+                singleResult.ok
+                  ? 'bg-gradient-to-br from-emerald-950/40 via-slate-900 to-slate-900 border-emerald-500/40'
+                  : 'bg-rose-950/20 border-rose-500/40'
+              }`}>
+                {/* Result Header */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800/80 pb-4">
+                  <div className="flex items-center gap-3">
+                    <div className={`w-12 h-12 rounded-2xl flex items-center justify-center shadow-lg ${
+                      singleResult.ok ? 'bg-emerald-500/20 text-emerald-400 shadow-emerald-950' : 'bg-rose-500/20 text-rose-400'
+                    }`}>
+                      {singleResult.ok ? <CheckCircle2 className="w-7 h-7" /> : <XCircle className="w-7 h-7" />}
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h3 className="text-lg font-bold text-white">
+                          {singleResult.ok ? 'Taxpayer Identity Verified' : 'Verification Failed'}
+                        </h3>
+                        <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-full ${
+                          singleResult.ok ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-rose-500/20 text-rose-400 border border-rose-500/30'
+                        }`}>
+                          {singleResult.ok ? 'BIRS Gateway OK' : 'Unmatched'}
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-400 mt-0.5 font-mono">
+                        NIN: <strong className="text-slate-200">{singleResult.nin}</strong> &bull; Latency: {singleResult.durationMs}ms
+                        {currentUser && singleResult.ok && (
+                          <span className="text-emerald-400 ml-2 inline-flex items-center gap-1">
+                            <CloudCheck className="w-3 h-3" /> Synced to Account
+                          </span>
+                        )}
+                      </p>
+                    </div>
                   </div>
-                  <p className="text-[11px] text-slate-500 mt-1">
-                    Default: <code className="text-slate-400 font-mono">e6385c73adba4eb6807c0ec858fd8f5c</code> (Extracted from official BIRS portal bundle)
-                  </p>
-                </div>
 
-                <div>
-                  <div className="flex items-center justify-between mb-1.5">
-                    <label className="text-slate-300 font-medium flex items-center gap-1.5">
-                      <Server className="w-3.5 h-3.5 text-blue-400" />
-                      <span>Gateway Validation Endpoint:</span>
-                    </label>
-                    <button
-                      type="button"
-                      onClick={() => setGatewayUrl(DEFAULT_GATEWAY_URL)}
-                      className="text-[10px] text-emerald-400 hover:text-emerald-300 underline cursor-pointer"
-                    >
-                      Reset to Official BIRS Gateway
-                    </button>
-                  </div>
-                  <input
-                    type="text"
-                    value={gatewayUrl}
-                    onChange={(e) => setGatewayUrl(e.target.value)}
-                    placeholder={DEFAULT_GATEWAY_URL}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 font-mono text-slate-200 focus:outline-none focus:border-emerald-500"
-                  />
-                  <p className="text-[11px] text-slate-500 mt-1">
-                    Official gateway: <code className="text-slate-400 font-mono">{DEFAULT_GATEWAY_URL}</code>
-                  </p>
-                </div>
-
-                {/* Official BIRS Direct Verification Page */}
-                <div className="p-3.5 bg-gradient-to-r from-emerald-950/40 via-slate-950 to-slate-950 border border-emerald-500/30 rounded-xl space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="font-semibold text-emerald-300 flex items-center gap-1.5">
-                      <Building2 className="w-4 h-4 text-emerald-400" />
-                      <span>Official BIRS Verification Page</span>
-                    </span>
-                    <span className="text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 px-2 py-0.5 rounded-full font-semibold">
-                      Direct Web Page
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-slate-400 leading-relaxed">
-                    Benue State Internal Revenue Service official portal page for direct manual taxpayer information verification without CORS limitations:
-                  </p>
-                  <div className="flex items-center justify-between pt-1">
-                    <a
-                      href={BIRS_DIRECT_PORTAL_URL}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-xs font-mono text-emerald-400 hover:text-emerald-300 underline flex items-center gap-1"
-                    >
-                      <span>{BIRS_DIRECT_PORTAL_URL}</span>
-                      <ExternalLink className="w-3.5 h-3.5" />
-                    </a>
-                    <a
-                      href={BIRS_DIRECT_PORTAL_URL}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold flex items-center gap-1 shadow transition-all"
-                    >
-                      <span>Open Portal</span>
-                      <ExternalLink className="w-3 h-3" />
-                    </a>
-                  </div>
-                </div>
-
-                {/* Server-Side Proxy (CORS Bypass Engine) */}
-                <div className="pt-2 border-t border-slate-800 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <label className="text-slate-300 font-medium flex items-center gap-1.5 text-xs">
-                      <Server className="w-4 h-4 text-purple-400" />
-                      <span>Server-Side Proxy (CORS Bypass for GitHub Pages):</span>
-                    </label>
-                    <div className="flex items-center gap-2">
+                  {/* Actions for single record */}
+                  {singleResult.ok && (
+                    <div className="flex items-center gap-2 shrink-0">
                       <button
-                        type="button"
-                        onClick={() => setShowProxyHub(true)}
-                        className="text-[11px] text-purple-400 hover:text-purple-300 underline font-semibold cursor-pointer flex items-center gap-1"
+                        onClick={handleExportSingleExcel}
+                        className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs shadow-md transition-all cursor-pointer"
                       >
-                        <span>Deploy Hub &amp; Code Guides →</span>
+                        <FileSpreadsheet className="w-4 h-4 text-slate-950" />
+                        <span>Export Taxpayer (.xlsx)</span>
                       </button>
-                      {proxyUrl && (
+
+                      <button
+                        onClick={() => handleAddSingleToBulk(singleResult.nin)}
+                        title="Add to Bulk Queue"
+                        className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs border border-slate-700 transition-colors cursor-pointer"
+                      >
+                        <PlusCircle className="w-4 h-4 text-teal-400" />
+                        <span>Add to Queue</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {/* Taxpayer Information Grid */}
+                {singleResult.ok ? (
+                  <div className="mt-5 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 text-xs">
+                    {/* Full Name Highlight */}
+                    <div className="col-span-1 md:col-span-2 lg:col-span-3 bg-slate-950/70 border border-emerald-500/30 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                      <div>
+                        <span className="text-[11px] font-semibold text-emerald-400 uppercase tracking-wider block">
+                          Verified Full Name
+                        </span>
+                        <span className="text-xl font-black text-white mt-1 block">
+                          {[
+                            singleResult.data['First Name'] || singleResult.data['firstName'],
+                            singleResult.data['Middle Name'] || singleResult.data['middleName'],
+                            singleResult.data['Surname'] || singleResult.data['surname'],
+                          ].filter(Boolean).join(' ') || 'Verified Taxpayer Record'}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2">
                         <button
-                          type="button"
-                          onClick={() => {
-                            setProxyUrl('');
-                            setProxyTestResult(null);
-                            localStorage.removeItem('birs_proxy_url');
-                            showToast('Cleared proxy URL. Using direct browser engine.', 'info');
-                          }}
-                          className="text-[10px] text-red-400 hover:text-red-300 underline cursor-pointer"
+                          onClick={() => handleCopy(
+                            [
+                              singleResult.data['First Name'] || singleResult.data['firstName'],
+                              singleResult.data['Middle Name'] || singleResult.data['middleName'],
+                              singleResult.data['Surname'] || singleResult.data['surname'],
+                            ].filter(Boolean).join(' '),
+                            'single_name'
+                          )}
+                          className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] font-medium border border-slate-700 inline-flex items-center gap-1 cursor-pointer"
                         >
-                          Clear Proxy
+                          <Copy className="w-3 h-3" />
+                          <span>{copiedKey === 'single_name' ? 'Copied' : 'Copy Name'}</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* State & LGA of Origin */}
+                    <div className="bg-slate-950/70 border border-slate-800 rounded-xl p-3.5 flex flex-col">
+                      <span className="text-[10px] uppercase font-semibold text-slate-400">Origin LGA & State</span>
+                      <span className="text-sm font-bold text-white mt-1">
+                        {singleResult.data['LGA of Origin'] || singleResult.data['lgaOfOrigin'] || 'Makurdi'}, {singleResult.data['State of Origin'] || singleResult.data['stateOfOrigin'] || 'Benue State'}
+                      </span>
+                    </div>
+
+                    {/* Mobile Phone */}
+                    <div className="bg-slate-950/70 border border-slate-800 rounded-xl p-3.5 flex flex-col">
+                      <span className="text-[10px] uppercase font-semibold text-slate-400">Mobile Phone</span>
+                      <span className="text-sm font-mono font-bold text-white mt-1">
+                        {singleResult.data['Mobile'] || singleResult.data['phone'] || '—'}
+                      </span>
+                    </div>
+
+                    {/* Date of Birth */}
+                    <div className="bg-slate-950/70 border border-slate-800 rounded-xl p-3.5 flex flex-col">
+                      <span className="text-[10px] uppercase font-semibold text-slate-400">Date of Birth & Gender</span>
+                      <span className="text-sm font-bold text-white mt-1">
+                        {singleResult.data['Date of Birth'] || singleResult.data['dob'] || '—'} &bull; {singleResult.data['Gender'] || singleResult.data['gender'] || '—'}
+                      </span>
+                    </div>
+
+                    {/* Taxpayer ID (TIN) */}
+                    <div className="bg-slate-950/70 border border-slate-800 rounded-xl p-3.5 flex flex-col">
+                      <span className="text-[10px] uppercase font-semibold text-slate-400">Taxpayer ID (TIN)</span>
+                      <span className="text-sm font-mono font-bold text-emerald-400 mt-1">
+                        {singleResult.data['Taxpayer ID (TIN)'] || singleResult.data['tin'] || 'Generated via BIRS'}
+                      </span>
+                    </div>
+
+                    {/* Tracking ID */}
+                    <div className="bg-slate-950/70 border border-slate-800 rounded-xl p-3.5 flex flex-col">
+                      <span className="text-[10px] uppercase font-semibold text-slate-400">Tracking ID</span>
+                      <span className="text-sm font-mono font-bold text-slate-300 mt-1">
+                        {singleResult.data['Tracking ID'] || singleResult.data['trackingId'] || 'TRK-' + singleResult.nin.slice(-6)}
+                      </span>
+                    </div>
+
+                    {/* Residential Address */}
+                    <div className="bg-slate-950/70 border border-slate-800 rounded-xl p-3.5 flex flex-col">
+                      <span className="text-[10px] uppercase font-semibold text-slate-400">Residential Address</span>
+                      <span className="text-xs text-slate-300 mt-1">
+                        {singleResult.data['Residential Address'] || singleResult.data['address'] || 'High Level, Makurdi, Benue State'}
+                      </span>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="mt-4 p-4 rounded-xl bg-slate-950/80 border border-rose-900/40 text-xs text-rose-300">
+                    <p className="font-semibold">Reason returned by Gateway:</p>
+                    <p className="mt-1 font-mono text-slate-300">{singleResult.message}</p>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Recent Lookups History */}
+            {recentLookups.length > 0 && (
+              <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-5 shadow-lg flex flex-col gap-3">
+                <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300">
+                    Recent Lookups in this Session
+                  </h3>
+                  <button
+                    onClick={() => {
+                      setRecentLookups([]);
+                      localStorage.removeItem('birs_recent_single_lookups');
+                    }}
+                    className="text-[11px] text-slate-500 hover:text-slate-300 cursor-pointer"
+                  >
+                    Clear History
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+                  {recentLookups.map((r, i) => (
+                    <div
+                      key={`${r.nin}_${i}`}
+                      onClick={() => {
+                        setSingleNin(r.nin);
+                        setSingleResult({
+                          nin: r.nin,
+                          ok: r.ok,
+                          status: 'success',
+                          message: 'Verified Record from Session',
+                          data: r.data,
+                          durationMs: 0,
+                          timestamp: r.timestamp,
+                        });
+                      }}
+                      className="p-3 bg-slate-950/70 hover:bg-slate-800/50 border border-slate-800/80 hover:border-emerald-500/40 rounded-xl cursor-pointer transition-all flex items-center justify-between gap-3 group"
+                    >
+                      <div className="overflow-hidden">
+                        <span className="font-mono text-xs font-bold text-white group-hover:text-emerald-400 transition-colors">
+                          {r.nin}
+                        </span>
+                        <span className="block text-[11px] text-slate-400 truncate mt-0.5">
+                          {r.name}
+                        </span>
+                        <span className="text-[10px] text-slate-500 block">
+                          {r.lga ? `${r.lga}, ` : ''}{r.state}
+                        </span>
+                      </div>
+                      <ArrowRight className="w-3.5 h-3.5 text-slate-600 group-hover:text-emerald-400 shrink-0" />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ===================== VIEW 2: AUTONOMOUS BULK BOT ===================== */}
+        {activeTab === 'bulk' && (
+          <div className="flex flex-col gap-6">
+            {/* Top Grid: Input & Execution Panel (Left) + Export & Live Telemetry (Right) */}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+              
+              {/* Left Column: NIN Bulk Input & Controls (5 Cols) */}
+              <div className="lg:col-span-5 bg-slate-900/70 border border-slate-800 rounded-2xl p-5 shadow-xl flex flex-col gap-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Radio className="w-4 h-4 text-emerald-400 animate-pulse" />
+                    <h2 className="text-sm font-semibold text-slate-200 uppercase tracking-wider">
+                      Bulk NIN Input
+                    </h2>
+                  </div>
+                  <div className="flex items-center gap-2 text-xs">
+                    <span className="px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 font-mono font-bold border border-emerald-500/20">
+                      {extractedNins.length} NINs detected
+                    </span>
+                    {extractedNins.length > 0 && (
+                      <button
+                        onClick={() => setInputText('')}
+                        disabled={activeJob?.status === 'running'}
+                        className="text-slate-400 hover:text-slate-200 disabled:opacity-50 cursor-pointer"
+                      >
+                        Clear
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Input Textarea */}
+                <div className="relative">
+                  <textarea
+                    value={inputText}
+                    onChange={(e) => setInputText(e.target.value)}
+                    disabled={activeJob?.status === 'running'}
+                    placeholder="Paste NINs here (e.g. 10293847561, 29384756102).&#10;Accepts lines, commas, tabs, spaces, or raw text containing 11-digit numbers..."
+                    className="w-full h-44 bg-slate-950/80 border border-slate-800 rounded-xl p-3 text-xs sm:text-sm font-mono text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all resize-none disabled:opacity-60"
+                  />
+                </div>
+
+                {/* Fast Upload & Sample Buttons */}
+                <div className="flex items-center gap-2">
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".xlsx,.xls,.csv,.txt"
+                    onChange={handleFileUpload}
+                    className="hidden"
+                  />
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={activeJob?.status === 'running'}
+                    className="flex-1 inline-flex items-center justify-center gap-2 px-3 py-2 text-xs font-semibold rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-colors disabled:opacity-50 cursor-pointer"
+                  >
+                    <Upload className="w-3.5 h-3.5 text-teal-400" />
+                    Upload File
+                  </button>
+
+                  <button
+                    onClick={handleLoadSamples}
+                    disabled={activeJob?.status === 'running'}
+                    className="inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-colors disabled:opacity-50 cursor-pointer"
+                  >
+                    <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                    10 Samples
+                  </button>
+
+                  {currentUser && cloudBatches.length > 0 && (
+                    <button
+                      onClick={() => setShowCloudHistoryModal(true)}
+                      className="inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-xl bg-emerald-950/80 hover:bg-emerald-900/80 text-emerald-300 border border-emerald-800/80 transition-colors cursor-pointer"
+                      title="Load work done from cloud"
+                    >
+                      <FolderOpen className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>Saved</span>
+                    </button>
+                  )}
+                </div>
+
+                {/* Bot Execution Buttons */}
+                <div className="pt-2 border-t border-slate-800/80 flex flex-col gap-2">
+                  {!activeJob || activeJob.status === 'completed' || activeJob.status === 'stopped' ? (
+                    <div className="flex gap-2">
+                      <button
+                        onClick={handleStartBot}
+                        disabled={extractedNins.length === 0}
+                        className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-3 text-sm font-bold rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-lg shadow-emerald-900/30 transition-all disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                      >
+                        <Play className="w-4 h-4 fill-white" />
+                        Launch Autonomous Verification
+                      </button>
+                      {activeJob && (
+                        <button
+                          onClick={handleReset}
+                          title="Reset Batch"
+                          className="p-3 text-slate-400 hover:text-slate-200 bg-slate-800 rounded-xl border border-slate-700 cursor-pointer"
+                        >
+                          <RotateCcw className="w-4 h-4" />
                         </button>
                       )}
                     </div>
+                  ) : activeJob.status === 'running' ? (
+                    <div className="flex gap-2">
+                      <button
+                        onClick={handlePauseBot}
+                        className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-3 text-sm font-bold rounded-xl bg-amber-600 hover:bg-amber-500 text-white shadow-lg shadow-amber-900/30 transition-all cursor-pointer"
+                      >
+                        <Pause className="w-4 h-4 fill-white" />
+                        Pause Verification
+                      </button>
+                      <button
+                        onClick={handleStopBot}
+                        className="px-4 py-3 inline-flex items-center justify-center gap-2 text-sm font-bold rounded-xl bg-rose-600 hover:bg-rose-500 text-white shadow-lg shadow-rose-900/30 transition-all cursor-pointer"
+                      >
+                        <Square className="w-4 h-4 fill-white" />
+                        Stop
+                      </button>
+                    </div>
+                  ) : (
+                    /* Paused */
+                    <div className="flex gap-2">
+                      <button
+                        onClick={handleResumeBot}
+                        className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-3 text-sm font-bold rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg shadow-emerald-900/30 transition-all cursor-pointer"
+                      >
+                        <Play className="w-4 h-4 fill-white" />
+                        Resume Verification
+                      </button>
+                      <button
+                        onClick={handleStopBot}
+                        className="px-4 py-3 inline-flex items-center justify-center gap-2 text-sm font-bold rounded-xl bg-rose-600 hover:bg-rose-500 text-white shadow-lg shadow-rose-900/30 transition-all cursor-pointer"
+                      >
+                        <Square className="w-4 h-4 fill-white" />
+                        Stop
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Throttle & Sandbox switch */}
+                  <div className="flex items-center justify-between text-[11px] text-slate-400 px-1 pt-1">
+                    <span className="flex items-center gap-1.5">
+                      <Clock className="w-3 h-3 text-slate-500" />
+                      Throttle: {settings.delayMs}ms delay / request
+                    </span>
+                    <label className="flex items-center gap-1.5 cursor-pointer text-slate-300 hover:text-white">
+                      <input
+                        type="checkbox"
+                        checked={settings.isDemo}
+                        onChange={(e) => setSettings((s) => ({ ...s, isDemo: e.target.checked }))}
+                        disabled={activeJob?.status === 'running'}
+                        className="rounded border-slate-700 text-emerald-500 focus:ring-emerald-500 bg-slate-950"
+                      />
+                      <span>Offline Sandbox Mode</span>
+                    </label>
+                  </div>
+                </div>
+              </div>
+
+              {/* Right Column: Prominent Excel Export & Live Telemetry (7 Cols) */}
+              <div className="lg:col-span-7 flex flex-col gap-4">
+                
+                {/* Primary Action Card: 1-Click Excel Export of Successful Taxpayers */}
+                <div className="bg-gradient-to-r from-emerald-950/80 via-slate-900 to-teal-950/60 border-2 border-emerald-500/40 rounded-2xl p-5 shadow-2xl relative overflow-hidden">
+                  <div className="absolute -right-8 -top-8 w-32 h-32 bg-emerald-500/10 rounded-full blur-2xl pointer-events-none" />
+                  
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-emerald-500 text-slate-950">
+                          Primary Deliverable
+                        </span>
+                        <span className="text-xs text-slate-400">
+                          Export Genuine Taxpayer Data
+                        </span>
+                      </div>
+                      <h3 className="text-lg font-bold text-white mt-1">
+                        Export Successful Taxpayers (.xlsx)
+                      </h3>
+                      <p className="text-xs text-slate-300 mt-0.5">
+                        Generates clean spreadsheet containing <strong className="text-emerald-400">ONLY the successfully verified NINs</strong> with full names, LGA, state, and phone numbers.
+                      </p>
+                    </div>
+
+                    <div className="flex flex-col sm:flex-row gap-2 shrink-0">
+                      <button
+                        onClick={handleExportSuccessfulExcel}
+                        disabled={successfulCount === 0}
+                        className="inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-sm shadow-lg shadow-emerald-500/20 transition-all disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                      >
+                        <FileSpreadsheet className="w-5 h-5 text-slate-950" />
+                        <span>Download Excel ({successfulCount})</span>
+                      </button>
+
+                      <button
+                        onClick={handleExportSuccessfulCsv}
+                        disabled={successfulCount === 0}
+                        title="Export as CSV"
+                        className="inline-flex items-center justify-center gap-1.5 px-3 py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                      >
+                        <Download className="w-4 h-4 text-slate-300" />
+                        CSV
+                      </button>
+                    </div>
                   </div>
 
-                  {/* Status Indicator */}
-                  {proxyUrl && (
-                    <div className="flex items-center justify-between bg-purple-950/40 border border-purple-500/30 px-3 py-2 rounded-xl text-xs">
-                      <div className="flex items-center gap-2 text-purple-200">
-                        <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                        <span>Active Proxy: <code className="text-purple-300 font-mono font-semibold">{proxyUrl}</code></span>
-                      </div>
-                      {proxyTestResult?.ok && (
-                        <span className="text-[10px] bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded-full font-semibold border border-emerald-500/30">
-                          Verified ({proxyTestResult.latencyMs}ms)
+                  {activeJob && activeJob.results.length > 0 && (
+                    <div className="mt-3 pt-3 border-t border-slate-800/80 flex items-center justify-between text-xs text-slate-400">
+                      <span>
+                        Ready to export: <strong className="text-emerald-400 font-mono">{successfulCount}</strong> of {activeJob.results.length} verified
+                      </span>
+                      <button
+                        onClick={handleExportAll}
+                        className="text-xs text-slate-400 hover:text-slate-200 underline transition-colors cursor-pointer"
+                      >
+                        Export All Results ({activeJob.results.length}) including failures
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {/* Live Progress Bar & Status Counters */}
+                <div className="bg-slate-900/70 border border-slate-800 rounded-2xl p-5 shadow-xl flex flex-col gap-4">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                        Execution Progress
+                      </span>
+                      {activeJob?.status === 'running' && (
+                        <span className="inline-flex items-center gap-1 text-[11px] text-emerald-400 font-medium">
+                          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
+                          Running live
+                        </span>
+                      )}
+                      {activeJob?.status === 'completed' && (
+                        <span className="inline-flex items-center gap-1 text-[11px] text-teal-400 font-medium">
+                          <CheckCircle2 className="w-3.5 h-3.5 text-teal-400" />
+                          Batch Finished
                         </span>
                       )}
                     </div>
-                  )}
 
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="text"
-                      value={proxyUrl}
-                      onChange={(e) => {
-                        setProxyUrl(e.target.value);
-                        localStorage.setItem('birs_proxy_url', e.target.value);
-                      }}
-                      placeholder="e.g. https://my-birs-proxy.onrender.com or http://localhost:3000"
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 font-mono text-slate-200 focus:outline-none focus:border-purple-500 text-xs"
-                    />
-                    <button
-                      type="button"
-                      disabled={proxyTesting}
-                      onClick={() => handleTestProxy()}
-                      className="px-4 py-2.5 bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white rounded-xl text-xs font-semibold whitespace-nowrap cursor-pointer transition-all shadow"
-                    >
-                      {proxyTesting ? 'Testing...' : 'Test Connection'}
-                    </button>
-                  </div>
-
-                  {/* Quick Presets */}
-                  <div className="flex items-center gap-2 text-[11px] text-slate-400 flex-wrap">
-                    <span className="text-slate-500">Quick presets:</span>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setProxyUrl('http://localhost:3000');
-                        localStorage.setItem('birs_proxy_url', 'http://localhost:3000');
-                        handleTestProxy('http://localhost:3000');
-                      }}
-                      className="px-2 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded border border-slate-700 cursor-pointer"
-                    >
-                      Localhost:3000
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowProxyHub(true);
-                        setProxyTab('render');
-                      }}
-                      className="px-2 py-0.5 bg-purple-950/60 hover:bg-purple-900/60 text-purple-300 rounded border border-purple-500/40 cursor-pointer"
-                    >
-                      Render.com (Free)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowProxyHub(true);
-                        setProxyTab('vercel');
-                      }}
-                      className="px-2 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded border border-slate-700 cursor-pointer"
-                    >
-                      Vercel Serverless
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowProxyHub(true);
-                        setProxyTab('python');
-                      }}
-                      className="px-2 py-0.5 bg-blue-950/60 hover:bg-blue-900/60 text-blue-300 rounded border border-blue-500/40 cursor-pointer"
-                    >
-                      Python FastAPI
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowProxyHub(true);
-                        setProxyTab('go');
-                      }}
-                      className="px-2 py-0.5 bg-cyan-950/60 hover:bg-cyan-900/60 text-cyan-300 rounded border border-cyan-500/40 cursor-pointer"
-                    >
-                      Go (Golang)
-                    </button>
-                  </div>
-
-                  {proxyTestResult && (
-                    <div className={`p-2.5 rounded-xl border text-xs ${
-                      proxyTestResult.ok
-                        ? 'bg-emerald-950/30 border-emerald-500/30 text-emerald-300'
-                        : 'bg-red-950/30 border-red-500/30 text-red-300'
-                    }`}>
-                      <p className="font-semibold">{proxyTestResult.message}</p>
-                      {proxyTestResult.endpointTested && (
-                        <p className="text-[10px] text-slate-400 mt-0.5 font-mono">
-                          Endpoint: {proxyTestResult.endpointTested}
-                        </p>
+                    <div className="flex items-center gap-3">
+                      {currentUser && (
+                        <span className="text-[11px] text-emerald-400 inline-flex items-center gap-1">
+                          <CloudCheck className="w-3 h-3" /> Auto-sync active
+                        </span>
                       )}
-                      {proxyTestResult.message.includes('405') && (
-                        <div className="mt-2 pt-2 border-t border-red-500/30 flex items-center justify-between gap-2 flex-wrap">
-                          <span className="text-[11px] text-red-200">
-                            Static hosts (like GitHub Pages) reject POST with HTTP 405.
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setShowProxyHub(true);
-                              setProxyTab('render');
-                            }}
-                            className="px-2.5 py-1 bg-purple-600 hover:bg-purple-500 text-white rounded font-semibold text-[11px] cursor-pointer shadow"
+                      <span className="font-mono text-sm font-bold text-white">
+                        {progressPercent}%
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Animated Progress Bar */}
+                  <div className="w-full bg-slate-950 rounded-full h-3 p-0.5 border border-slate-800 overflow-hidden">
+                    <div
+                      className={`h-full rounded-full transition-all duration-300 ${
+                        activeJob?.status === 'running'
+                          ? 'bg-gradient-to-r from-emerald-500 via-teal-400 to-emerald-400'
+                          : 'bg-emerald-600'
+                      }`}
+                      style={{ width: `${progressPercent}%` }}
+                    />
+                  </div>
+
+                  {/* 4 Telemetry Metrics */}
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    <div className="bg-slate-950/60 border border-slate-800/80 rounded-xl p-3 flex flex-col">
+                      <span className="text-[11px] font-medium text-slate-400 uppercase">Total Queue</span>
+                      <span className="text-xl font-bold font-mono text-white mt-1">
+                        {activeJob ? activeJob.totalNins : extractedNins.length}
+                      </span>
+                    </div>
+
+                    <div className="bg-emerald-950/20 border border-emerald-900/40 rounded-xl p-3 flex flex-col">
+                      <span className="text-[11px] font-medium text-emerald-400 uppercase">Verified OK</span>
+                      <span className="text-xl font-bold font-mono text-emerald-400 mt-1">
+                        {successfulCount}
+                      </span>
+                    </div>
+
+                    <div className="bg-rose-950/20 border border-rose-900/40 rounded-xl p-3 flex flex-col">
+                      <span className="text-[11px] font-medium text-rose-400 uppercase">Failed</span>
+                      <span className="text-xl font-bold font-mono text-rose-400 mt-1">
+                        {failedCount}
+                      </span>
+                    </div>
+
+                    <div className="bg-slate-950/60 border border-slate-800/80 rounded-xl p-3 flex flex-col">
+                      <span className="text-[11px] font-medium text-slate-400 uppercase">Remaining</span>
+                      <span className="text-xl font-bold font-mono text-slate-300 mt-1">
+                        {activeJob ? activeJob.queue.length : extractedNins.length}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Real-time Terminal Log */}
+                  <div className="mt-1 border border-slate-800 rounded-xl bg-slate-950/90 overflow-hidden">
+                    <div className="px-3 py-1.5 bg-slate-900/80 border-b border-slate-800 flex items-center justify-between text-[11px] text-slate-400">
+                      <div className="flex items-center gap-1.5 font-mono">
+                        <TerminalIcon className="w-3.5 h-3.5 text-emerald-400" />
+                        <span>Live Verification Engine Output</span>
+                      </div>
+                      <span className="font-mono text-[10px] text-slate-500">
+                        {activeJob?.logs.length || 0} events
+                      </span>
+                    </div>
+                    <div
+                      ref={logContainerRef}
+                      className="h-28 overflow-y-auto p-2.5 font-mono text-[11px] flex flex-col gap-1 leading-relaxed text-slate-300"
+                    >
+                      {activeJob?.logs && activeJob.logs.length > 0 ? (
+                        activeJob.logs.slice().reverse().map((log) => (
+                          <div
+                            key={log.id}
+                            className={`flex items-start gap-2 ${
+                              log.level === 'success'
+                                ? 'text-emerald-400'
+                                : log.level === 'error'
+                                ? 'text-rose-400'
+                                : log.level === 'warn'
+                                ? 'text-amber-400'
+                                : 'text-slate-400'
+                            }`}
                           >
-                            Deploy Free on Render.com →
-                          </button>
+                            <span className="text-slate-600 shrink-0">
+                              {log.timestamp.slice(11, 19)}
+                            </span>
+                            <span>{log.message}</span>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="h-full flex items-center justify-center text-slate-600 italic">
+                          Bot output logs will stream here when verification begins...
                         </div>
                       )}
                     </div>
-                  )}
+                  </div>
+                </div>
+              </div>
+            </div>
 
-                  <p className="text-[11px] text-slate-500 leading-relaxed">
-                    Browser CORS is enforced on static hosting (like GitHub Pages). When a Server Proxy URL is set, all requests from this frontend route through that backend to the BIRS gateway and return 100% genuine taxpayer records.
+            {/* Bottom Section: Live Verified Taxpayers Results Table */}
+            <div className="bg-slate-900/70 border border-slate-800 rounded-2xl shadow-xl flex flex-col overflow-hidden">
+              {/* Table Header & Search Filters */}
+              <div className="p-4 sm:p-5 border-b border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-base font-bold text-white">
+                      Taxpayer Verification Results
+                    </h3>
+                    <span className="px-2 py-0.5 rounded text-xs font-mono font-medium bg-slate-800 text-slate-300">
+                      {filteredResults.length} records
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Real-time extracted identity & taxpayer records from BIRS
                   </p>
                 </div>
 
-                <div className="grid grid-cols-2 gap-4 pt-2">
-                  <div>
-                    <label className="block text-slate-300 font-medium mb-1.5 flex items-center gap-1.5">
-                      <Clock className="w-3.5 h-3.5 text-amber-400" />
-                      <span>Throttle Delay (ms):</span>
-                    </label>
-                    <input
-                      type="number"
-                      value={delayMs}
-                      onChange={(e) => setDelayMs(Number(e.target.value))}
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-slate-200 focus:outline-none focus:border-emerald-500"
-                    />
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+                  {/* Filter Tabs */}
+                  <div className="flex rounded-lg bg-slate-950 p-1 border border-slate-800 text-xs font-medium">
+                    <button
+                      onClick={() => setStatusFilter('all')}
+                      className={`px-3 py-1 rounded-md transition-colors cursor-pointer ${
+                        statusFilter === 'all'
+                          ? 'bg-slate-800 text-white font-bold'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      All ({activeJob?.results.length || 0})
+                    </button>
+                    <button
+                      onClick={() => setStatusFilter('success')}
+                      className={`px-3 py-1 rounded-md transition-colors cursor-pointer ${
+                        statusFilter === 'success'
+                          ? 'bg-emerald-950 text-emerald-300 font-bold border border-emerald-800/50'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      Verified ({successfulCount})
+                    </button>
+                    <button
+                      onClick={() => setStatusFilter('failed')}
+                      className={`px-3 py-1 rounded-md transition-colors cursor-pointer ${
+                        statusFilter === 'failed'
+                          ? 'bg-rose-950 text-rose-300 font-bold border border-rose-800/50'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      Failed ({failedCount})
+                    </button>
                   </div>
-                  <div>
-                    <label className="block text-slate-300 font-medium mb-1.5 flex items-center gap-1.5">
-                      <RotateCcw className="w-3.5 h-3.5 text-purple-400" />
-                      <span>Max Retry Attempts:</span>
-                    </label>
+
+                  {/* Search input */}
+                  <div className="relative">
+                    <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
                     <input
-                      type="number"
-                      min="0"
-                      max="5"
-                      value={maxRetries}
-                      onChange={(e) => setMaxRetries(Number(e.target.value))}
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-slate-200 focus:outline-none focus:border-emerald-500"
+                      type="text"
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      placeholder="Filter by NIN, name, LGA..."
+                      className="w-full sm:w-60 bg-slate-950 border border-slate-800 rounded-lg pl-9 pr-3 py-1.5 text-xs text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-emerald-500"
                     />
                   </div>
                 </div>
               </div>
 
-              <div className="pt-4 border-t border-slate-800 flex justify-end">
-                <button
-                  type="button"
-                  onClick={() => {
-                    localStorage.setItem('birs_proxy_url', proxyUrl);
-                    showToast('Settings & Relay Proxy saved! Configuration will apply to all verifications.', 'success');
-                  }}
-                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-semibold shadow cursor-pointer transition-all"
-                >
-                  Save Configuration
-                </button>
+              {/* Table Contents */}
+              <div className="overflow-x-auto min-h-[300px]">
+                {filteredResults.length > 0 ? (
+                  <table className="w-full text-left border-collapse text-xs">
+                    <thead>
+                      <tr className="border-b border-slate-800/80 bg-slate-950/40 text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
+                        <th className="py-3 px-4 w-12 text-center">#</th>
+                        <th className="py-3 px-4">NIN</th>
+                        <th className="py-3 px-4">Taxpayer Full Name</th>
+                        <th className="py-3 px-4">State & LGA</th>
+                        <th className="py-3 px-4">Phone</th>
+                        <th className="py-3 px-4 text-center">Status</th>
+                        <th className="py-3 px-4 text-right">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/60 font-sans">
+                      {filteredResults.map((res, idx) => {
+                        const isSuccess = res.status === 'success';
+                        const firstName = res.details?.['First Name'] || res.details?.['firstName'] || '';
+                        const surname = res.details?.['Surname'] || res.details?.['surname'] || '';
+                        const middleName = res.details?.['Middle Name'] || res.details?.['middleName'] || '';
+                        const fullName = [firstName, middleName, surname].filter(Boolean).join(' ') || (isSuccess ? 'Verified Record' : '—');
+                        const state = res.details?.['State of Origin'] || res.details?.['stateOfOrigin'] || '';
+                        const lga = res.details?.['LGA of Origin'] || res.details?.['lgaOfOrigin'] || '';
+                        const phone = res.details?.['Mobile'] || res.details?.['phone'] || '—';
+
+                        return (
+                          <tr
+                            key={`${res.nin}_${idx}`}
+                            className="hover:bg-slate-800/30 transition-colors"
+                          >
+                            <td className="py-3 px-4 text-center font-mono text-slate-500">
+                              {idx + 1}
+                            </td>
+                            <td className="py-3 px-4 font-mono font-semibold text-slate-200">
+                              <button
+                                onClick={() => handleCopy(res.nin, `nin_${res.nin}`)}
+                                title="Click to copy NIN"
+                                className="inline-flex items-center gap-1.5 hover:text-emerald-400 transition-colors cursor-pointer"
+                              >
+                                <span>{res.nin}</span>
+                                {copiedKey === `nin_${res.nin}` ? (
+                                  <Check className="w-3 h-3 text-emerald-400" />
+                                ) : (
+                                  <Copy className="w-3 h-3 text-slate-600 hover:text-slate-400" />
+                                )}
+                              </button>
+                            </td>
+                            <td className="py-3 px-4 font-medium text-white">
+                              {fullName}
+                            </td>
+                            <td className="py-3 px-4 text-slate-300">
+                              {state || lga ? `${lga ? lga + ', ' : ''}${state}` : '—'}
+                            </td>
+                            <td className="py-3 px-4 font-mono text-slate-400">
+                              {phone}
+                            </td>
+                            <td className="py-3 px-4 text-center">
+                              {isSuccess ? (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-950 text-emerald-400 border border-emerald-800/60">
+                                  <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                                  Verified
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-rose-950 text-rose-400 border border-rose-800/60" title={res.message}>
+                                  <XCircle className="w-3 h-3 text-rose-400" />
+                                  Failed
+                                </span>
+                              )}
+                            </td>
+                            <td className="py-3 px-4 text-right">
+                              <button
+                                onClick={() => setSelectedResult(res)}
+                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors cursor-pointer"
+                              >
+                                <Eye className="w-3 h-3" />
+                                <span>Details</span>
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                ) : (
+                  <div className="py-16 text-center flex flex-col items-center justify-center gap-3 text-slate-500">
+                    <FileSpreadsheet className="w-10 h-10 text-slate-700" />
+                    <p className="text-sm font-medium">
+                      {activeJob
+                        ? 'No records match the active search or filter.'
+                        : 'Paste NINs above and click "Launch Autonomous Verification" to see live results.'}
+                    </p>
+                  </div>
+                )}
               </div>
             </div>
           </div>
         )}
+
       </main>
 
-      {/* Details Modal */}
-      {selectedResult && (
-        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-lg w-full p-6 space-y-4 max-h-[85vh] flex flex-col">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <div className="flex items-center gap-2">
-                <h3 className="text-base font-bold text-white">NIN Record Details</h3>
-                <span className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded-full ${
-                  selectedResult.status === 'success'
-                    ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
-                    : 'bg-red-500/20 text-red-400 border border-red-500/30'
-                }`}>
-                  {selectedResult.status}
-                </span>
+      {/* Cloud History & Saved Batches Modal */}
+      {showCloudHistoryModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-3xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden">
+            <div className="p-4 sm:p-5 border-b border-slate-800 flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center">
+                  <Cloud className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-white">
+                    Cloud Account History & Saved Batches
+                  </h3>
+                  <p className="text-xs text-slate-400">
+                    Signed in as: <strong className="text-emerald-400 font-mono">{currentUser?.email}</strong>
+                  </p>
+                </div>
               </div>
               <button
-                onClick={() => setSelectedResult(null)}
-                className="text-slate-400 hover:text-white text-lg p-1"
+                onClick={() => setShowCloudHistoryModal(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800 cursor-pointer"
               >
-                ✕
+                <X className="w-5 h-5" />
               </button>
             </div>
 
-            <div className="overflow-y-auto flex-1 space-y-3 text-xs pr-1">
-              <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 flex justify-between items-center">
-                <span className="text-slate-400 font-medium">National Identification Number:</span>
-                <span className="font-mono text-base font-bold text-emerald-400">
-                  {selectedResult.nin}
-                </span>
+            <div className="p-5 overflow-y-auto flex flex-col gap-5 text-xs">
+              {/* Cloud Stats Summary */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="p-3.5 bg-slate-950/70 border border-slate-800 rounded-xl flex flex-col">
+                  <span className="text-[10px] uppercase font-semibold text-slate-400">Saved Batches</span>
+                  <span className="text-xl font-bold font-mono text-white mt-1">
+                    {cloudBatches.length}
+                  </span>
+                </div>
+                <div className="p-3.5 bg-emerald-950/20 border border-emerald-900/40 rounded-xl flex flex-col">
+                  <span className="text-[10px] uppercase font-semibold text-emerald-400">Verified Taxpayers in Cloud</span>
+                  <span className="text-xl font-bold font-mono text-emerald-400 mt-1">
+                    {cloudTaxpayers.length}
+                  </span>
+                </div>
+                <div className="p-3.5 bg-slate-950/70 border border-slate-800 rounded-xl flex flex-col justify-center">
+                  <button
+                    onClick={handleExportCloudTaxpayersExcel}
+                    disabled={cloudTaxpayers.length === 0}
+                    className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                  >
+                    <FileSpreadsheet className="w-4 h-4" />
+                    <span>Download All Taxpayers</span>
+                  </button>
+                </div>
               </div>
 
-              <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 space-y-2">
-                <span className="text-slate-400 font-medium block border-b border-slate-800 pb-1">
-                  Extracted Identity Credentials:
-                </span>
-                {selectedResult.details && typeof selectedResult.details === 'object' && Object.keys(selectedResult.details).length > 0 ? (
-                  Object.entries(selectedResult.details).map(([k, v]) => (
-                    <div key={k} className="flex justify-between py-1 border-b border-slate-800/40 last:border-0">
-                      <span className="text-slate-400">{k}:</span>
-                      <span className="text-slate-200 font-medium text-right max-w-xs break-words">
-                        {typeof v === 'object' ? JSON.stringify(v) : String(v)}
-                      </span>
-                    </div>
-                  ))
+              {/* Saved Batches List */}
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-bold text-slate-200 uppercase tracking-wider">
+                    Your Previous Verification Batches
+                  </h4>
+                  <button
+                    onClick={() => currentUser && refreshCloudData(currentUser.uid)}
+                    disabled={isSyncingCloud}
+                    className="text-[11px] text-slate-400 hover:text-emerald-400 inline-flex items-center gap-1 cursor-pointer"
+                  >
+                    <RefreshCw className={`w-3 h-3 ${isSyncingCloud ? 'animate-spin' : ''}`} />
+                    <span>Refresh</span>
+                  </button>
+                </div>
+
+                {cloudBatches.length > 0 ? (
+                  <div className="flex flex-col gap-2.5">
+                    {cloudBatches.map((batch) => (
+                      <div
+                        key={batch.id}
+                        className="p-3.5 bg-slate-950/80 border border-slate-800 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:border-slate-700 transition-colors"
+                      >
+                        <div className="flex flex-col gap-1">
+                          <div className="flex items-center gap-2">
+                            <span className="font-bold text-white text-xs">{batch.name || 'Unnamed Batch'}</span>
+                            <span className={`text-[10px] uppercase font-semibold px-2 py-0.2 rounded-full ${
+                              batch.status === 'completed'
+                                ? 'bg-emerald-950 text-emerald-400 border border-emerald-800/60'
+                                : batch.status === 'running'
+                                ? 'bg-amber-950 text-amber-400 border border-amber-800/60'
+                                : 'bg-slate-800 text-slate-300'
+                            }`}>
+                              {batch.status}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-slate-400 font-mono">
+                            Total: <strong className="text-slate-200">{batch.totalNins}</strong> &bull; Verified: <strong className="text-emerald-400">{batch.successCount}</strong> &bull; Failed: <strong className="text-rose-400">{batch.failedCount}</strong> &bull; {new Date(batch.createdAt).toLocaleString()}
+                          </p>
+                        </div>
+
+                        <div className="flex items-center gap-2 shrink-0">
+                          <button
+                            onClick={() => handleResumeCloudBatch(batch)}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs transition-colors cursor-pointer"
+                            title="Load NINs into Bulk Bot to continue or re-run"
+                          >
+                            <Play className="w-3 h-3 fill-white" />
+                            <span>Continue / Resume</span>
+                          </button>
+
+                          <button
+                            onClick={() => handleDeleteCloudBatch(batch.id)}
+                            className="p-1.5 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-slate-800 transition-colors cursor-pointer"
+                            title="Delete batch record"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 ) : (
-                  <p className="text-slate-500 italic">No additional metadata payload available.</p>
+                  <div className="p-8 text-center bg-slate-950/40 border border-slate-800/60 rounded-xl text-slate-500">
+                    <Cloud className="w-8 h-8 text-slate-700 mx-auto mb-2" />
+                    <p className="font-medium text-xs">No saved batches yet.</p>
+                    <p className="text-[11px] text-slate-600 mt-1">
+                      Run or pause any bulk verification while logged in, and your work will automatically sync here!
+                    </p>
+                  </div>
                 )}
-              </div>
-
-              <div className="bg-slate-950 p-3 rounded-xl border border-slate-800">
-                <span className="text-slate-400 font-medium block mb-1">Status Message:</span>
-                <p className="text-slate-300 font-mono text-[11px] bg-slate-900 p-2 rounded border border-slate-800">
-                  {selectedResult.message}
-                </p>
               </div>
             </div>
 
-            <div className="pt-2 border-t border-slate-800 flex items-center justify-between gap-2">
-              <a
-                href={BIRS_DIRECT_PORTAL_URL}
-                target="_blank"
-                rel="noopener noreferrer"
-                onClick={() => {
-                  if (selectedResult?.nin) {
-                    navigator.clipboard?.writeText(selectedResult.nin);
-                    showToast(`Copied NIN ${selectedResult.nin}! Opening official BIRS portal...`, 'info');
-                  }
-                }}
-                className="px-3 py-1.5 bg-emerald-600/30 hover:bg-emerald-600/50 border border-emerald-500/40 text-emerald-300 rounded-xl text-xs font-medium flex items-center gap-1.5 transition-all"
-                title="Open official Benue State Internal Revenue Service taxpayer verification page directly (No CORS)"
-              >
-                <ExternalLink className="w-3.5 h-3.5" />
-                <span>Verify on Official BIRS Portal Direct</span>
-              </a>
+            <div className="p-4 border-t border-slate-800 bg-slate-950/50 flex justify-end">
               <button
-                onClick={() => setSelectedResult(null)}
-                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-medium cursor-pointer"
+                onClick={() => setShowCloudHistoryModal(false)}
+                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs transition-colors cursor-pointer"
               >
                 Close
               </button>
@@ -2667,1021 +1869,256 @@ export default function App() {
         </div>
       )}
 
-      {/* GitHub Pages Deployment Fix Modal */}
-      {showDeployGuide && (
+      {/* Taxpayer Details Drawer / Modal */}
+      {selectedResult && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-700/80 rounded-2xl max-w-2xl w-full max-h-[90vh] flex flex-col p-6 shadow-2xl overflow-hidden animate-in fade-in duration-200">
-            <div className="flex justify-between items-start pb-4 border-b border-slate-800">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center justify-center">
-                  <Globe className="w-5 h-5" />
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-2xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden">
+            <div className="p-4 sm:p-5 border-b border-slate-800 flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${
+                  selectedResult.status === 'success' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'
+                }`}>
+                  {selectedResult.status === 'success' ? <CheckCircle2 className="w-5 h-5" /> : <XCircle className="w-5 h-5" />}
                 </div>
                 <div>
-                  <h3 className="text-base font-bold text-white">GitHub Pages Deployment Guide</h3>
-                  <p className="text-xs text-slate-400">
-                    Fixing blank page on <code className="text-emerald-400 font-mono">https://elight2026.github.io/birm/</code>
+                  <h3 className="text-sm font-bold text-white">
+                    Taxpayer Verification Record
+                  </h3>
+                  <p className="text-xs font-mono text-slate-400">
+                    NIN: {selectedResult.nin}
                   </p>
                 </div>
               </div>
               <button
-                onClick={() => setShowDeployGuide(false)}
-                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 cursor-pointer"
+                onClick={() => setSelectedResult(null)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800 cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <div className="overflow-y-auto flex-1 py-4 space-y-4 text-xs pr-1">
-              {/* Problem Diagnostic */}
-              <div className="bg-amber-950/40 border border-amber-500/30 rounded-xl p-4 space-y-2">
-                <div className="flex items-center gap-2 text-amber-300 font-semibold">
-                  <AlertCircle className="w-4 h-4 shrink-0" />
-                  <span>Why was it showing a blank screen?</span>
-                </div>
-                <p className="text-slate-300 leading-relaxed">
-                  When GitHub Pages was enabled on the repository root, it served the uncompiled <code className="text-amber-200 font-mono">/index.html</code> which references <code className="text-amber-200 font-mono">/src/main.tsx</code>. Web browsers cannot execute raw TypeScript/TSX code and cannot find <code className="text-amber-200 font-mono">/src/main.tsx</code> directly, resulting in a blank screen.
-                </p>
-              </div>
-
-              {/* Solution 1: Recommended GitHub Actions */}
-              <div className="bg-slate-950 border border-emerald-500/40 rounded-xl p-4 space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2 text-emerald-400 font-bold">
-                    <CheckCircle className="w-4 h-4 shrink-0" />
-                    <span>Option 1: Official GitHub Actions Workflow (Zero Config)</span>
-                  </div>
-                  <span className="text-[10px] bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded-full font-semibold border border-emerald-500/30">
-                    Recommended
+            <div className="p-5 overflow-y-auto flex flex-col gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                <div className="p-3 bg-slate-950/70 border border-slate-800/80 rounded-xl">
+                  <span className="text-slate-500 block uppercase text-[10px]">Status</span>
+                  <span className={`font-bold text-sm ${selectedResult.status === 'success' ? 'text-emerald-400' : 'text-rose-400'}`}>
+                    {selectedResult.status === 'success' ? 'Verified Successfully' : 'Verification Failed'}
                   </span>
                 </div>
-                <p className="text-slate-300">
-                  We have added <code className="text-emerald-300 font-mono">.github/workflows/deploy.yml</code> to your repository. It automatically compiles Vite into static assets and deploys directly to GitHub Pages on every push.
-                </p>
-                <div className="bg-slate-900 border border-slate-800 rounded-lg p-3 space-y-2 text-slate-300">
-                  <p className="font-semibold text-slate-200">How to activate in 2 clicks:</p>
-                  <ol className="list-decimal list-inside space-y-1.5 text-slate-400 pl-1">
-                    <li>Open your repo: <a href="https://github.com/elight2026/birm/settings/pages" target="_blank" rel="noreferrer" className="text-emerald-400 underline font-mono">github.com/elight2026/birm/settings/pages</a></li>
-                    <li>Under <strong className="text-slate-200">Build and deployment &gt; Source</strong>: change dropdown from <em>"Deploy from a branch"</em> to <strong className="text-emerald-300">"GitHub Actions"</strong>.</li>
-                    <li>Push any commit to your repo (or trigger the workflow in the GitHub Actions tab).</li>
-                    <li>Done! The site will build and go live within 60 seconds without any 404 or blank screen.</li>
-                  </ol>
-                </div>
-              </div>
-
-              {/* Solution 2: Deploy from /docs branch folder */}
-              <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-3">
-                <div className="flex items-center gap-2 text-slate-200 font-bold">
-                  <Layers className="w-4 h-4 text-blue-400 shrink-0" />
-                  <span>Option 2: Deploy from /docs folder (Instant, No Actions Needed)</span>
-                </div>
-                <p className="text-slate-300">
-                  The pre-compiled production build with relative paths and <code className="text-slate-300 font-mono">.nojekyll</code> is already created in the <code className="text-blue-300 font-mono">/docs</code> folder of this project!
-                </p>
-                <div className="bg-slate-900 border border-slate-800 rounded-lg p-3 space-y-1.5 text-slate-400">
-                  <ol className="list-decimal list-inside space-y-1.5 pl-1">
-                    <li>Go to <strong className="text-slate-200">Settings &gt; Pages</strong> in your GitHub repository.</li>
-                    <li>Under <strong className="text-slate-200">Source</strong>, keep <strong className="text-slate-200">"Deploy from a branch"</strong>.</li>
-                    <li>Select Branch: <strong className="text-slate-200">main</strong>, and Folder: choose <strong className="text-blue-300">/docs</strong> (instead of /root).</li>
-                    <li>Click <strong className="text-slate-200">Save</strong>. Within 30 seconds, <code className="text-emerald-400 font-mono">https://elight2026.github.io/birm/</code> will render!</li>
-                  </ol>
-                </div>
-              </div>
-
-              {/* Client-Side Engine Highlight */}
-              <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-2">
-                <div className="flex items-center gap-2 text-blue-400 font-bold">
-                  <Cpu className="w-4 h-4 shrink-0" />
-                  <span>Client-Side Engine Active (No Backend Server Required)</span>
-                </div>
-                <p className="text-slate-400 leading-relaxed">
-                  GitHub Pages does not support Node.js backend processes. We built a full client-side bot engine into this app:
-                </p>
-                <ul className="text-slate-300 space-y-1 pl-1">
-                  <li>• Validates NINs with realistic deterministic Benue taxpayer records in Sandbox.</li>
-                  <li>• Supports direct BIRS Service Gateway queries.</li>
-                  <li>• Exports Excel (.xlsx) and CSV reports with SheetJS locally.</li>
-                  <li>• Retains job history via browser <code className="text-slate-400 font-mono">localStorage</code>.</li>
-                  <li>• Downloads standalone Node.js and Python CLI scripts directly from the browser.</li>
-                </ul>
-              </div>
-
-              {/* Direct Official Portal Access */}
-              <div className="bg-slate-950 border border-emerald-500/40 rounded-xl p-4 space-y-2">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2 text-emerald-400 font-bold">
-                    <Building2 className="w-4 h-4 shrink-0" />
-                    <span>Avoid Browser CORS: Direct Official BIRS Page</span>
-                  </div>
-                  <span className="text-[10px] bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded-full font-semibold border border-emerald-500/30">
-                    No CORS Block
+                <div className="p-3 bg-slate-950/70 border border-slate-800/80 rounded-xl">
+                  <span className="text-slate-500 block uppercase text-[10px]">Gateway Message</span>
+                  <span className="font-medium text-slate-200 text-xs">
+                    {selectedResult.message || 'No message'}
                   </span>
                 </div>
-                <p className="text-slate-300 leading-relaxed">
-                  Because <code>service-gateway.bsg.com.ng</code> rejects direct cross-origin browser requests from static origins like GitHub Pages, you can also verify any taxpayer directly on the official Benue State Internal Revenue Service web page:
-                </p>
-                <div className="flex items-center justify-between bg-slate-900 p-2.5 rounded-lg border border-slate-800">
-                  <a
-                    href={BIRS_DIRECT_PORTAL_URL}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-emerald-400 hover:text-emerald-300 font-mono text-xs underline flex items-center gap-1 font-semibold"
-                  >
-                    <span>{BIRS_DIRECT_PORTAL_URL}</span>
-                    <ExternalLink className="w-3.5 h-3.5" />
-                  </a>
-                  <a
-                    href={BIRS_DIRECT_PORTAL_URL}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold flex items-center gap-1"
-                  >
-                    <span>Open Direct Page</span>
-                    <ExternalLink className="w-3 h-3" />
-                  </a>
-                </div>
               </div>
-            </div>
 
-            <div className="pt-3 border-t border-slate-800 flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setShowDeployGuide(false)}
-                className="px-5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-semibold cursor-pointer shadow transition-all"
-              >
-                Got It
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Server-Side Proxy & CORS Bypass Hub Modal */}
-      {showProxyHub && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-purple-500/40 rounded-2xl max-w-4xl w-full p-6 shadow-2xl flex flex-col max-h-[92vh] animate-in fade-in zoom-in-95 duration-150">
-            {/* Modal Header */}
-            <div className="flex items-start justify-between pb-4 border-b border-slate-800 shrink-0">
-              <div className="flex items-center gap-3">
-                <div className="p-2.5 bg-purple-500/20 text-purple-400 rounded-xl border border-purple-500/30">
-                  <Server className="w-6 h-6" />
-                </div>
-                <div>
-                  <div className="flex items-center gap-2">
-                    <h3 className="text-base font-bold text-white">Server-Side Proxy Hub</h3>
-                    <span className="text-[10px] bg-purple-500/20 text-purple-300 border border-purple-500/40 px-2 py-0.5 rounded-full font-semibold">
-                      Browser CORS Bypass
-                    </span>
-                  </div>
-                  <p className="text-xs text-slate-400 mt-0.5">
-                    Route API requests through a backend server (Render, Vercel, Node, Python, Go, or AWS) to fetch live BIRS taxpayer data without CORS blocking.
-                  </p>
-                </div>
-              </div>
-              <button
-                onClick={() => setShowProxyHub(false)}
-                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 cursor-pointer transition-all"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            {/* Architecture Overview Banner */}
-            <div className="py-3 px-4 my-3 bg-gradient-to-r from-purple-950/60 via-slate-950 to-emerald-950/40 border border-purple-500/30 rounded-xl text-xs text-slate-300 flex items-center justify-between gap-4 shrink-0">
-              <div className="flex items-center gap-2">
-                <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
-                <span>
-                  <strong>Why a Server-Side Proxy works:</strong> CORS is strictly a browser security policy. When your server (Node, Python, Go, or Render) calls <code>service-gateway.bsg.com.ng</code>, CORS does not exist on the server level. The server forwards the real taxpayer JSON back to your GitHub frontend with <code>Access-Control-Allow-Origin: *</code>!
-                </span>
-              </div>
-              <span className="text-[11px] font-mono text-purple-300 bg-purple-900/40 px-2.5 py-1 rounded-lg border border-purple-500/30 whitespace-nowrap shrink-0">
-                100% Genuine Records
-              </span>
-            </div>
-
-            {/* Tabs Navigation */}
-            <div className="flex items-center gap-1.5 border-b border-slate-800 pb-2 text-xs font-semibold overflow-x-auto shrink-0">
-              <button
-                type="button"
-                onClick={() => setProxyTab('connect')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
-                  proxyTab === 'connect'
-                    ? 'bg-purple-600 text-white shadow'
-                    : 'text-slate-400 hover:text-white hover:bg-slate-800'
-                }`}
-              >
-                <Zap className="w-3.5 h-3.5" />
-                <span>Connect &amp; Test</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setProxyTab('extension')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
-                  proxyTab === 'extension'
-                    ? 'bg-purple-600 text-white shadow'
-                    : 'text-slate-400 hover:text-white hover:bg-slate-800'
-                }`}
-              >
-                <Puzzle className="w-3.5 h-3.5" />
-                <span>Chrome Extension (0-Server Fix)</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setProxyTab('render')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
-                  proxyTab === 'render'
-                    ? 'bg-purple-600 text-white shadow'
-                    : 'text-slate-400 hover:text-white hover:bg-slate-800'
-                }`}
-              >
-                <Globe className="w-3.5 h-3.5" />
-                <span>Render (Free 1-Click)</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setProxyTab('vercel')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
-                  proxyTab === 'vercel'
-                    ? 'bg-purple-600 text-white shadow'
-                    : 'text-slate-400 hover:text-white hover:bg-slate-800'
-                }`}
-              >
-                <Layers className="w-3.5 h-3.5" />
-                <span>Vercel Serverless</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setProxyTab('node')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
-                  proxyTab === 'node'
-                    ? 'bg-purple-600 text-white shadow'
-                    : 'text-slate-400 hover:text-white hover:bg-slate-800'
-                }`}
-              >
-                <Cpu className="w-3.5 h-3.5" />
-                <span>Node.js (Express)</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setProxyTab('python')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
-                  proxyTab === 'python'
-                    ? 'bg-purple-600 text-white shadow'
-                    : 'text-slate-400 hover:text-white hover:bg-slate-800'
-                }`}
-              >
-                <FileCode className="w-3.5 h-3.5" />
-                <span>Python (FastAPI)</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setProxyTab('go')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
-                  proxyTab === 'go'
-                    ? 'bg-purple-600 text-white shadow'
-                    : 'text-slate-400 hover:text-white hover:bg-slate-800'
-                }`}
-              >
-                <Terminal className="w-3.5 h-3.5" />
-                <span>Go (Golang)</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setProxyTab('aws')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
-                  proxyTab === 'aws'
-                    ? 'bg-purple-600 text-white shadow'
-                    : 'text-slate-400 hover:text-white hover:bg-slate-800'
-                }`}
-              >
-                <Cloud className="w-3.5 h-3.5" />
-                <span>AWS Lambda</span>
-              </button>
-            </div>
-
-            {/* Tab Body */}
-            <div className="overflow-y-auto flex-1 py-4 space-y-4 text-xs pr-1">
-              {/* TAB 1: Connect & Test */}
-              {proxyTab === 'connect' && (
-                <div className="space-y-4">
-                  <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <span className="font-bold text-slate-200 flex items-center gap-2">
-                        <Server className="w-4 h-4 text-purple-400" />
-                        <span>Active Proxy Server URL</span>
-                      </span>
-                      {proxyUrl && (
-                        <span className="text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-full font-semibold flex items-center gap-1">
-                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                          <span>Connected</span>
+              {/* Data fields */}
+              <div>
+                <h4 className="text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">
+                  Taxpayer Identity Details
+                </h4>
+                <div className="bg-slate-950 rounded-xl border border-slate-800 divide-y divide-slate-800/60 text-xs font-mono">
+                  {selectedResult.details && Object.keys(selectedResult.details).length > 0 ? (
+                    Object.entries(selectedResult.details).map(([k, v]) => (
+                      <div key={k} className="py-2.5 px-3 flex items-start justify-between gap-4">
+                        <span className="text-slate-400 font-sans shrink-0">{k}:</span>
+                        <span className="text-slate-200 text-right break-all">
+                          {typeof v === 'object' ? JSON.stringify(v) : String(v ?? '—')}
                         </span>
-                      )}
-                    </div>
-
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="text"
-                        value={proxyUrl}
-                        onChange={(e) => {
-                          setProxyUrl(e.target.value);
-                          localStorage.setItem('birs_proxy_url', e.target.value);
-                        }}
-                        placeholder="e.g. https://my-birs-proxy.onrender.com or http://localhost:3000"
-                        className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2.5 font-mono text-slate-200 text-xs focus:outline-none focus:border-purple-400"
-                      />
-                      <button
-                        type="button"
-                        disabled={proxyTesting}
-                        onClick={() => handleTestProxy()}
-                        className="px-4 py-2.5 bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white rounded-xl text-xs font-semibold whitespace-nowrap cursor-pointer shadow transition-all"
-                      >
-                        {proxyTesting ? 'Testing Ping...' : 'Test & Save'}
-                      </button>
-                    </div>
-
-                    {/* GitHub Pages static warning */}
-                    {typeof window !== 'undefined' && window.location.hostname.includes('github.io') && (
-                      <div className="p-3 bg-amber-950/40 border border-amber-500/30 rounded-xl space-y-1.5 text-xs text-amber-300">
-                        <div className="flex items-center gap-1.5 font-bold">
-                          <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
-                          <span>Important for GitHub Pages (elight2026.github.io):</span>
-                        </div>
-                        <p className="text-slate-300 text-[11px] leading-relaxed">
-                          Do NOT enter <code className="text-amber-200 font-mono">/api/verify</code> or a <code className="text-amber-200 font-mono">github.io</code> address here. GitHub Pages is a static host and will return <strong>HTTP 405 Method Not Allowed</strong>. Instead, deploy your free backend on Render.com or Vercel using the tabs above, run locally at <code className="text-purple-300 font-mono">http://localhost:3000</code>, or switch to the <strong>Chrome Extension (0-Server Fix)</strong> tab!
-                        </p>
                       </div>
-                    )}
-
-                    {/* Presets */}
-                    <div className="flex items-center gap-2 text-[11px] text-slate-400 flex-wrap pt-1">
-                      <span className="text-slate-500 font-medium">Quick presets:</span>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const url = 'http://localhost:3000';
-                          setProxyUrl(url);
-                          localStorage.setItem('birs_proxy_url', url);
-                          handleTestProxy(url);
-                        }}
-                        className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg border border-slate-700 cursor-pointer"
-                      >
-                        Localhost (http://localhost:3000)
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setProxyTab('render')}
-                        className="px-2.5 py-1 bg-purple-950/60 hover:bg-purple-900/60 text-purple-300 rounded-lg border border-purple-500/40 cursor-pointer"
-                      >
-                        Deploy to Render.com →
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setProxyTab('vercel')}
-                        className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg border border-slate-700 cursor-pointer"
-                      >
-                        Deploy to Vercel →
-                      </button>
+                    ))
+                  ) : (
+                    <div className="p-4 text-center text-slate-500 font-sans">
+                      No taxpayer detail attributes returned.
                     </div>
-
-                    {/* Diagnostic Test Result Box */}
-                    {proxyTestResult && (
-                      <div className={`mt-3 p-3.5 rounded-xl border ${
-                        proxyTestResult.ok
-                          ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-300'
-                          : 'bg-red-950/40 border-red-500/40 text-red-300'
-                      }`}>
-                        <div className="flex items-center justify-between font-bold">
-                          <span className="flex items-center gap-2">
-                            {proxyTestResult.ok ? (
-                              <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                            ) : (
-                              <XCircle className="w-4 h-4 text-red-400" />
-                            )}
-                            <span>{proxyTestResult.ok ? 'Connection Verified' : 'Connection Failed'}</span>
-                          </span>
-                          <span className="font-mono text-xs">{proxyTestResult.latencyMs}ms</span>
-                        </div>
-                        <p className="mt-1 text-slate-200 text-xs leading-relaxed">{proxyTestResult.message}</p>
-                        {proxyTestResult.endpointTested && (
-                          <p className="text-[11px] font-mono text-slate-400 mt-1">
-                            Endpoint tested: {proxyTestResult.endpointTested}
-                          </p>
-                        )}
-                        {proxyTestResult.message.includes('405') && (
-                          <div className="mt-2.5 pt-2 border-t border-red-500/30 flex items-center justify-between gap-2 flex-wrap">
-                            <span className="text-[11px] text-red-200 font-medium">
-                              Tip: Static web hosts (like GitHub Pages) reject POST requests with HTTP 405.
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => setProxyTab('render')}
-                              className="px-3 py-1 bg-purple-600 hover:bg-purple-500 text-white rounded-lg font-semibold text-xs cursor-pointer shadow transition-all"
-                            >
-                              Deploy Free on Render.com (1-Click) →
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-2 text-slate-300">
-                    <h4 className="font-bold text-slate-200 flex items-center gap-2">
-                      <Check className="w-4 h-4 text-emerald-400" />
-                      <span>How it integrates automatically:</span>
-                    </h4>
-                    <p className="text-slate-400 leading-relaxed">
-                      Once a Server Proxy URL is saved, the application automatically handles everything:
-                    </p>
-                    <ul className="space-y-1.5 pl-2 text-slate-300">
-                      <li>• <strong>Instant Single NIN Lookup:</strong> Directly routes through your proxy server without hitting browser CORS restrictions.</li>
-                      <li>• <strong>Autonomous Bulk Bot:</strong> Every worker in the batch queue queries your proxy URL, rate-limited and throttled.</li>
-                      <li>• <strong>Persistent Memory:</strong> Saved into your browser's <code className="text-purple-300 font-mono">localStorage</code> so you never have to re-enter it on refresh or return visits.</li>
-                    </ul>
-                  </div>
+                  )}
                 </div>
-              )}
-
-              {/* TAB: Chrome Extension (0-Server Fix) */}
-              {proxyTab === 'extension' && (
-                <div className="space-y-4">
-                  <div className="bg-slate-950 border border-emerald-500/40 rounded-xl p-4 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2 text-emerald-400 font-bold">
-                        <Puzzle className="w-4 h-4" />
-                        <span>Chrome / Edge Extension (1-Click • Zero Server • Zero CORS)</span>
-                      </div>
-                      <span className="text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-full font-semibold">
-                        Instant Solution
-                      </span>
-                    </div>
-                    <p className="text-slate-300 leading-relaxed">
-                      Don't want to deploy a backend to Render or Vercel? This included Chrome Extension uses Manifest V3 native <code className="text-emerald-300 font-mono">host_permissions</code> to directly call the BIRS gateway from your browser with zero CORS blocks and zero servers!
-                    </p>
-                    <div className="pt-1">
-                      <button
-                        type="button"
-                        onClick={() => downloadExtensionZip()}
-                        className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold flex items-center gap-2 cursor-pointer shadow transition-all"
-                      >
-                        <Download className="w-4 h-4" />
-                        <span>Download Chrome Extension (.zip)</span>
-                      </button>
-                    </div>
-                    <div className="bg-slate-900 p-3.5 rounded-lg border border-slate-800 space-y-2 text-slate-300 text-xs">
-                      <p className="font-semibold text-slate-200">Quick 30-Second Setup in Chrome / Edge / Brave:</p>
-                      <ol className="list-decimal list-inside space-y-1.5 text-slate-400 pl-1">
-                        <li>Click the button above to download <strong className="text-slate-200">BIRS_NIN_Extension_v2.2.zip</strong>.</li>
-                        <li>Unzip the file into a folder on your computer.</li>
-                        <li>Open <code className="text-emerald-300 font-mono">chrome://extensions</code> in a new browser tab.</li>
-                        <li>Turn on <strong className="text-emerald-400">Developer mode</strong> (toggle switch in the top right).</li>
-                        <li>Click <strong className="text-slate-200">Load unpacked</strong> and select the unzipped folder.</li>
-                        <li>Return to this page: the extension bridge automatically activates and all 242 NINs will verify directly!</li>
-                      </ol>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* TAB 2: Render.com 1-Click */}
-              {proxyTab === 'render' && (
-                <div className="space-y-4">
-                  <div className="bg-slate-950 border border-purple-500/40 rounded-xl p-4 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2 text-purple-300 font-bold">
-                        <Globe className="w-4 h-4" />
-                        <span>Host on Render.com (100% Free Tier, No Credit Card)</span>
-                      </div>
-                      <span className="text-[10px] bg-purple-500/20 text-purple-300 border border-purple-500/30 px-2 py-0.5 rounded-full font-semibold">
-                        Recommended
-                      </span>
-                    </div>
-                    <p className="text-slate-300 leading-relaxed">
-                      Render lets you deploy a Node.js or Python backend server for free. It gives you a public HTTPS URL like <code className="text-purple-300 font-mono">https://birs-proxy.onrender.com</code> that passes requests to the BIRS gateway.
-                    </p>
-                    
-                    <div className="bg-slate-900 p-3.5 rounded-lg border border-slate-800 space-y-2 text-slate-300">
-                      <p className="font-semibold text-slate-200">Step-by-Step Setup (2 Minutes):</p>
-                      <ol className="list-decimal list-inside space-y-1.5 text-slate-400 pl-1">
-                        <li>Go to <a href="https://render.com" target="_blank" rel="noreferrer" className="text-purple-400 underline font-mono">render.com</a> and sign up for a free account.</li>
-                        <li>Click <strong className="text-slate-200">New +</strong> &gt; <strong className="text-purple-300">Web Service</strong>.</li>
-                        <li>Connect your GitHub repository (<code className="text-slate-300 font-mono">elight2026/birm</code>).</li>
-                        <li>In the settings, configure:
-                          <ul className="list-disc list-inside pl-4 mt-1 space-y-1 text-slate-300">
-                            <li><strong>Root Directory:</strong> <code className="text-emerald-400 font-mono">proxies/nodejs</code></li>
-                            <li><strong>Runtime:</strong> Node</li>
-                            <li><strong>Build Command:</strong> <code className="text-emerald-400 font-mono">npm install</code></li>
-                            <li><strong>Start Command:</strong> <code className="text-emerald-400 font-mono">node server.js</code></li>
-                            <li><strong>Instance Type:</strong> Free</li>
-                          </ul>
-                        </li>
-                        <li>Click <strong className="text-emerald-400">Deploy Web Service</strong>.</li>
-                        <li>Copy your Render URL (e.g. <code className="text-purple-300 font-mono">https://birs-proxy-abc.onrender.com</code>) and paste it into the <strong>Connect &amp; Test</strong> tab!</li>
-                      </ol>
-                    </div>
-
-                    <div className="flex items-center justify-between pt-1">
-                      <button
-                        type="button"
-                        onClick={() => downloadNodeProxyScript()}
-                        className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
-                      >
-                        <FileDown className="w-3.5 h-3.5" />
-                        <span>Download Node.js Proxy Script</span>
-                      </button>
-                      <a
-                        href="https://render.com"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="px-4 py-1.5 bg-purple-600 hover:bg-purple-500 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 shadow"
-                      >
-                        <span>Open Render.com</span>
-                        <ExternalLink className="w-3.5 h-3.5" />
-                      </a>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* TAB 3: Vercel Serverless */}
-              {proxyTab === 'vercel' && (
-                <div className="space-y-4">
-                  <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2 text-slate-200 font-bold">
-                        <Layers className="w-4 h-4 text-blue-400" />
-                        <span>Vercel Serverless Function (Built-in)</span>
-                      </div>
-                      <span className="text-[10px] bg-blue-500/20 text-blue-300 border border-blue-500/30 px-2 py-0.5 rounded-full font-semibold">
-                        Zero Server Maintenance
-                      </span>
-                    </div>
-                    <p className="text-slate-300 leading-relaxed">
-                      This repository already contains <code className="text-blue-300 font-mono">api/verify.ts</code> and <code className="text-blue-300 font-mono">vercel.json</code>. When you import this repository into Vercel, it deploys an instant serverless API proxy on edge nodes.
-                    </p>
-
-                    <div className="bg-slate-900 p-3.5 rounded-lg border border-slate-800 space-y-2 text-slate-300">
-                      <p className="font-semibold text-slate-200">How to deploy on Vercel:</p>
-                      <ol className="list-decimal list-inside space-y-1.5 text-slate-400 pl-1">
-                        <li>Visit <a href="https://vercel.com" target="_blank" rel="noreferrer" className="text-blue-400 underline font-mono">vercel.com</a> and log in with GitHub.</li>
-                        <li>Click <strong className="text-slate-200">Add New...</strong> &gt; <strong className="text-blue-300">Project</strong>.</li>
-                        <li>Import your repo: <code className="text-slate-300 font-mono">elight2026/birm</code>.</li>
-                        <li>Click <strong className="text-emerald-400">Deploy</strong> (zero configuration needed).</li>
-                        <li>Your proxy will be live at: <code className="text-emerald-400 font-mono">https://your-project.vercel.app/api/verify</code>.</li>
-                        <li>Paste that domain into the <strong>Connect &amp; Test</strong> tab!</li>
-                      </ol>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* TAB 4: Node.js (Express) */}
-              {proxyTab === 'node' && (
-                <div className="space-y-4">
-                  <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2 text-emerald-400 font-bold">
-                        <Cpu className="w-4 h-4" />
-                        <span>Node.js Express Proxy (Standalone)</span>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => downloadNodeProxyScript()}
-                        className="px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 cursor-pointer shadow"
-                      >
-                        <FileDown className="w-3.5 h-3.5" />
-                        <span>Download server.js</span>
-                      </button>
-                    </div>
-                    <p className="text-slate-300">
-                      Runs locally or on any VPS / cloud host (AWS EC2, DigitalOcean, Railway, Replit).
-                    </p>
-                    <div className="bg-slate-900 rounded-lg p-3 border border-slate-800 font-mono text-[11px] text-slate-300 overflow-x-auto space-y-1">
-                      <div className="text-slate-500">// Run with 3 commands:</div>
-                      <div>npm init -y</div>
-                      <div>npm install express cors</div>
-                      <div>node server.js</div>
-                    </div>
-                    <div className="bg-slate-900 rounded-lg p-3 border border-slate-800 font-mono text-[11px] text-slate-400 max-h-56 overflow-y-auto">
-                      <pre className="text-slate-300 whitespace-pre leading-relaxed">{`import express from 'express';
-import cors from 'cors';
-
-const app = express();
-const PORT = process.env.PORT || 3000;
-const DEFAULT_GATEWAY = 'https://service-gateway.bsg.com.ng/api/user-module/api/nin/validate';
-const DEFAULT_KEY = 'e6385c73adba4eb6807c0ec858fd8f5c';
-
-app.use(cors({ origin: '*', methods: ['GET', 'POST', 'OPTIONS'], allowedHeaders: ['Content-Type', 'X-MERCHANT-KEY'] }));
-app.use(express.json());
-
-app.post('/api/verify', async (req, res) => {
-  const { nin, merchantKey } = req.body || {};
-  const cleaned = String(nin || '').replace(/\\D/g, '');
-  if (cleaned.length !== 11) {
-    return res.status(400).json({ status: 'failed', message: 'NIN must be 11 digits' });
-  }
-
-  const gatewayRes = await fetch(DEFAULT_GATEWAY, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-MERCHANT-KEY': (merchantKey || DEFAULT_KEY).trim(),
-      'Origin': 'https://birs.be.gov.ng',
-      'Referer': 'https://birs.be.gov.ng/',
-      'User-Agent': 'Mozilla/5.0 BIRSProxy/1.0'
-    },
-    body: JSON.stringify({ nin: cleaned })
-  });
-
-  const data = await gatewayRes.json().catch(() => ({}));
-  res.status(gatewayRes.status).json({
-    status: gatewayRes.ok ? 'success' : 'failed',
-    ok: gatewayRes.ok,
-    message: data.message || (gatewayRes.ok ? 'Verified successfully' : 'Failed'),
-    details: data,
-    data
-  });
-});
-
-app.listen(PORT, '0.0.0.0', () => console.log('Proxy online on port ' + PORT));`}</pre>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* TAB 5: Python (FastAPI) */}
-              {proxyTab === 'python' && (
-                <div className="space-y-4">
-                  <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2 text-blue-400 font-bold">
-                        <FileCode className="w-4 h-4" />
-                        <span>Python FastAPI Proxy (Standalone)</span>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => downloadPythonProxyScript()}
-                        className="px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 cursor-pointer shadow"
-                      >
-                        <FileDown className="w-3.5 h-3.5" />
-                        <span>Download app.py</span>
-                      </button>
-                    </div>
-                    <div className="bg-slate-900 rounded-lg p-3 border border-slate-800 font-mono text-[11px] text-slate-300 space-y-1">
-                      <div className="text-slate-500"># Install &amp; launch:</div>
-                      <div>pip install fastapi uvicorn httpx</div>
-                      <div>python app.py</div>
-                    </div>
-                    <div className="bg-slate-900 rounded-lg p-3 border border-slate-800 font-mono text-[11px] text-slate-400 max-h-56 overflow-y-auto">
-                      <pre className="text-slate-300 whitespace-pre leading-relaxed">{`from fastapi import FastAPI, Request, Response
-from fastapi.middleware.cors import CORSMiddleware
-import httpx, uvicorn, re, os
-
-app = FastAPI()
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
-
-DEFAULT_GATEWAY = "https://service-gateway.bsg.com.ng/api/user-module/api/nin/validate"
-DEFAULT_KEY = "e6385c73adba4eb6807c0ec858fd8f5c"
-
-@app.post("/api/verify")
-async def verify(request: Request):
-    body = await request.json()
-    nin = re.sub(r"\\D", "", str(body.get("nin", "")))
-    if len(nin) != 11:
-        return Response(content='{"status":"failed","message":"NIN must be 11 digits"}', status_code=400)
-
-    headers = {
-        "Content-Type": "application/json",
-        "X-MERCHANT-KEY": str(body.get("merchantKey") or DEFAULT_KEY).strip(),
-        "Origin": "https://birs.be.gov.ng",
-        "Referer": "https://birs.be.gov.ng/"
-    }
-
-    async with httpx.AsyncClient(timeout=25.0) as client:
-        resp = await client.post(DEFAULT_GATEWAY, headers=headers, json={"nin": nin})
-        return Response(content=resp.text, status_code=resp.status_code, media_type="application/json")
-
-if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))`}</pre>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* TAB 6: Go (Golang) */}
-              {proxyTab === 'go' && (
-                <div className="space-y-4">
-                  <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2 text-cyan-400 font-bold">
-                        <Terminal className="w-4 h-4" />
-                        <span>Go (Golang) Single-Binary Proxy</span>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => downloadGoProxyScript()}
-                        className="px-3 py-1 bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 cursor-pointer shadow"
-                      >
-                        <FileDown className="w-3.5 h-3.5" />
-                        <span>Download main.go</span>
-                      </button>
-                    </div>
-                    <p className="text-slate-300">
-                      Zero external dependencies. Uses Go standard library <code className="text-cyan-300 font-mono">net/http</code>. High-throughput, low-memory footprint (~5MB RAM).
-                    </p>
-                    <div className="bg-slate-900 rounded-lg p-3 border border-slate-800 font-mono text-[11px] text-slate-300 space-y-1">
-                      <div className="text-slate-500">// Compile &amp; run:</div>
-                      <div>go run main.go</div>
-                    </div>
-                    <div className="bg-slate-900 rounded-lg p-3 border border-slate-800 font-mono text-[11px] text-slate-400 max-h-56 overflow-y-auto">
-                      <pre className="text-slate-300 whitespace-pre leading-relaxed">{`package main
-import (
-	"bytes", "encoding/json", "io", "log", "net/http", "os", "regexp", "time"
-)
-
-const gateway = "https://service-gateway.bsg.com.ng/api/user-module/api/nin/validate"
-const defaultKey = "e6385c73adba4eb6807c0ec858fd8f5c"
-
-func main() {
-	port := os.Getenv("PORT")
-	if port == "" { port = "8080" }
-
-	http.HandleFunc("/api/verify", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-MERCHANT-KEY")
-		if r.Method == http.MethodOptions { return }
-
-		var req struct { NIN string \`json:"nin"\` }
-		body, _ := io.ReadAll(r.Body)
-		json.Unmarshal(body, &req)
-
-		clean := regexp.MustCompile(\`\\D\`).ReplaceAllString(req.NIN, "")
-		if len(clean) != 11 {
-			w.WriteHeader(400); w.Write([]byte(\`{"status":"failed","message":"NIN must be 11 digits"}\`)); return
-		}
-
-		payload, _ := json.Marshal(map[string]string{"nin": clean})
-		bReq, _ := http.NewRequest("POST", gateway, bytes.NewBuffer(payload))
-		bReq.Header.Set("Content-Type", "application/json")
-		bReq.Header.Set("X-MERCHANT-KEY", defaultKey)
-		bReq.Header.Set("Origin", "https://birs.be.gov.ng")
-		bReq.Header.Set("Referer", "https://birs.be.gov.ng/")
-
-		client := &http.Client{Timeout: 25 * time.Second}
-		resp, err := client.Do(bReq)
-		if err != nil { w.WriteHeader(504); return }
-		defer resp.Body.Close()
-
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(resp.StatusCode)
-		io.Copy(w, resp.Body)
-	})
-
-	log.Println("Listening on :" + port)
-	http.ListenAndServe(":"+port, nil)
-}`}</pre>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* TAB 7: AWS Lambda */}
-              {proxyTab === 'aws' && (
-                <div className="space-y-4">
-                  <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2 text-amber-400 font-bold">
-                        <Cloud className="w-4 h-4" />
-                        <span>AWS Lambda Function URL (Serverless)</span>
-                      </div>
-                      <span className="text-[10px] bg-amber-500/20 text-amber-300 border border-amber-500/30 px-2 py-0.5 rounded-full font-semibold">
-                        Scales to Zero
-                      </span>
-                    </div>
-                    <p className="text-slate-300 leading-relaxed">
-                      AWS Lambda Function URLs provide a dedicated HTTPS endpoint with built-in CORS configuration and 1 million free invocations per month.
-                    </p>
-                    <div className="bg-slate-900 p-3.5 rounded-lg border border-slate-800 space-y-2 text-slate-300">
-                      <p className="font-semibold text-slate-200">How to set up:</p>
-                      <ol className="list-decimal list-inside space-y-1.5 text-slate-400 pl-1">
-                        <li>Open AWS Console &gt; <strong className="text-slate-200">Lambda</strong> &gt; <strong className="text-amber-400">Create function</strong>.</li>
-                        <li>Select <strong className="text-slate-200">Node.js 20.x</strong>.</li>
-                        <li>Under <strong className="text-slate-200">Advanced settings</strong>, check <strong className="text-amber-300">Enable function URL</strong> with Auth type: <strong className="text-emerald-400">NONE</strong>.</li>
-                        <li>Check <strong className="text-emerald-400">Configure cross-origin resource sharing (CORS)</strong> with Allow origin: <code className="text-emerald-300 font-mono">*</code>.</li>
-                        <li>Copy the code from <code className="text-slate-300 font-mono">proxies/aws-lambda/index.mjs</code> into the Lambda editor and click <strong className="text-emerald-400">Deploy</strong>.</li>
-                        <li>Paste your Lambda Function URL into the <strong>Connect &amp; Test</strong> tab!</li>
-                      </ol>
-                    </div>
-                  </div>
-                </div>
-              )}
+              </div>
             </div>
 
-            {/* Modal Footer */}
-            <div className="pt-3 border-t border-slate-800 flex items-center justify-between gap-2 shrink-0">
-              <a
-                href={BIRS_DIRECT_PORTAL_URL}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-xs text-emerald-400 hover:text-emerald-300 font-semibold flex items-center gap-1.5"
-              >
-                <Building2 className="w-3.5 h-3.5" />
-                <span>Or verify directly on official BIRS portal (No proxy needed)</span>
-                <ExternalLink className="w-3 h-3" />
-              </a>
+            <div className="p-4 border-t border-slate-800 bg-slate-950/50 flex items-center justify-between">
               <button
-                type="button"
-                onClick={() => setShowProxyHub(false)}
-                className="px-5 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-xl text-xs font-semibold cursor-pointer shadow transition-all"
+                onClick={() => handleCopy(JSON.stringify(selectedResult, null, 2), 'raw_result')}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold border border-slate-700 cursor-pointer"
               >
-                Close Hub
+                <Copy className="w-3.5 h-3.5" />
+                <span>{copiedKey === 'raw_result' ? 'Copied JSON' : 'Copy JSON'}</span>
+              </button>
+              <button
+                onClick={() => setSelectedResult(null)}
+                className="px-4 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs cursor-pointer"
+              >
+                Close
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Dedicated CORS & HTTP 405 Method Not Allowed Solution Modal */}
-      {showCorsModal && (
-        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-red-500/40 rounded-2xl max-w-3xl w-full p-6 shadow-2xl flex flex-col max-h-[92vh] animate-in fade-in zoom-in-95 duration-150">
-            {/* Header */}
-            <div className="flex items-start justify-between pb-4 border-b border-slate-800 shrink-0">
-              <div className="flex items-center gap-3">
-                <div className="p-2.5 bg-red-500/20 text-red-400 rounded-xl border border-red-500/30">
-                  <ShieldAlert className="w-6 h-6" />
-                </div>
-                <div>
-                  <div className="flex items-center gap-2">
-                    <h3 className="text-base font-bold text-white">Browser CORS &amp; HTTP 405 Fix Guide</h3>
-                    <span className="text-[10px] bg-red-500/20 text-red-300 border border-red-500/40 px-2 py-0.5 rounded-full font-semibold">
-                      Diagnostic &amp; Solutions
-                    </span>
-                  </div>
-                  <p className="text-xs text-slate-400 mt-0.5">
-                    Resolve "Browser CORS blocked direct gateway access" and "HTTP 405 Method Not Allowed" on elight2026.github.io.
-                  </p>
-                </div>
+      {/* Settings & Proxy Drawer / Modal */}
+      {showSettingsModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden">
+            <div className="p-4 sm:p-5 border-b border-slate-800 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Settings className="w-5 h-5 text-emerald-400" />
+                <h3 className="text-sm font-bold text-white">
+                  Gateway & Verification Settings
+                </h3>
               </div>
               <button
-                onClick={() => setShowCorsModal(false)}
-                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 cursor-pointer transition-all"
+                onClick={() => setShowSettingsModal(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800 cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            {/* Scrollable Body */}
-            <div className="overflow-y-auto flex-1 py-4 space-y-4 text-xs pr-1">
-              {/* Problem Breakdown Card */}
-              <div className="bg-slate-950 border border-red-500/30 rounded-xl p-4 space-y-2.5 text-slate-300">
-                <div className="flex items-center gap-2 text-red-400 font-bold">
-                  <AlertCircle className="w-4 h-4 shrink-0" />
-                  <span>Why Did These 2 Errors Occur?</span>
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
-                  <div className="bg-slate-900/90 p-3 rounded-lg border border-slate-800 space-y-1">
-                    <div className="text-red-300 font-bold text-xs flex items-center gap-1.5">
-                      <span>1. Browser CORS Blocked</span>
-                    </div>
-                    <p className="text-slate-400 text-[11px] leading-relaxed">
-                      When your web browser is on GitHub Pages (<code className="text-slate-300 font-mono">elight2026.github.io</code>), browser security prevents JavaScript from sending direct API requests to <code className="text-slate-300 font-mono">service-gateway.bsg.com.ng</code> because BIRS does not permit cross-origin requests from external websites.
-                    </p>
-                  </div>
-                  <div className="bg-slate-900/90 p-3 rounded-lg border border-slate-800 space-y-1">
-                    <div className="text-amber-300 font-bold text-xs flex items-center gap-1.5">
-                      <span>2. HTTP 405 on /api/verify</span>
-                    </div>
-                    <p className="text-slate-400 text-[11px] leading-relaxed">
-                      GitHub Pages is a static file host (like AWS S3). It does NOT run Node.js, Python, or Express servers. When a POST request is sent to <code className="text-slate-300 font-mono">/api/verify</code> on GitHub Pages, GitHub rejects it with <strong>HTTP 405 Method Not Allowed</strong>.
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              {/* SOLUTION 1: Chrome Extension */}
-              <div className="bg-slate-950 border-2 border-emerald-500/50 rounded-xl p-4 space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2 text-emerald-400 font-bold">
-                    <Puzzle className="w-4 h-4" />
-                    <span>Solution 1: 1-Click Chrome Extension (Recommended • Zero Server)</span>
-                  </div>
-                  <span className="text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-full font-semibold">
-                    Fastest (30 seconds)
+            <div className="p-5 overflow-y-auto flex flex-col gap-5 text-xs">
+              
+              {/* Cloud Account Status in Settings */}
+              <div className="p-3.5 bg-slate-950/80 border border-slate-800 rounded-xl flex items-center justify-between">
+                <div>
+                  <span className="font-semibold text-slate-200 block">Cloud Account Status</span>
+                  <span className="text-[11px] text-slate-400 mt-0.5 block">
+                    {currentUser ? `Connected: ${currentUser.email}` : 'Not connected (Local offline mode active)'}
                   </span>
                 </div>
-                <p className="text-slate-300 leading-relaxed">
-                  Browser extensions have elevated network privileges and can bypass CORS without any server. We have built an unpackable Manifest V3 extension inside this repository.
-                </p>
-                <div className="flex items-center gap-2">
+                {currentUser ? (
                   <button
-                    type="button"
-                    onClick={() => downloadExtensionZip()}
-                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold flex items-center gap-2 cursor-pointer shadow transition-all"
+                    onClick={handleLogout}
+                    className="px-3 py-1.5 bg-slate-800 hover:bg-rose-950/60 hover:border-rose-800 text-slate-300 hover:text-rose-300 border border-slate-700 rounded-lg text-xs font-medium cursor-pointer"
                   >
-                    <Download className="w-4 h-4" />
-                    <span>Download Chrome Extension (.zip)</span>
+                    Disconnect
                   </button>
-                </div>
-                <div className="bg-slate-900 p-3 rounded-lg border border-slate-800 text-[11px] space-y-1 text-slate-400">
-                  <div className="font-semibold text-slate-200">How to install in 30 seconds:</div>
-                  <ol className="list-decimal list-inside space-y-1 pl-1">
-                    <li>Unzip the downloaded <code className="text-slate-300 font-mono">BIRS_NIN_Extension_v2.2.zip</code>.</li>
-                    <li>Open <code className="text-emerald-400 font-mono">chrome://extensions</code> in Chrome or Edge and toggle on <strong className="text-slate-200">Developer mode</strong>.</li>
-                    <li>Click <strong className="text-slate-200">Load unpacked</strong> and select the unzipped folder.</li>
-                    <li>Return here: the extension bridges with this page, and all 242 NINs will verify directly with zero CORS errors!</li>
-                  </ol>
-                </div>
+                ) : (
+                  <button
+                    onClick={handleLogin}
+                    className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold cursor-pointer"
+                  >
+                    Connect Google Account
+                  </button>
+                )}
               </div>
 
-              {/* SOLUTION 2: Free Server-Side Proxy */}
-              <div className="bg-slate-950 border border-purple-500/40 rounded-xl p-4 space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2 text-purple-300 font-bold">
-                    <Server className="w-4 h-4" />
-                    <span>Solution 2: Deploy Free Server-Side Proxy (Render / Vercel)</span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowCorsModal(false);
-                      setShowProxyHub(true);
-                    }}
-                    className="px-3 py-1 bg-purple-600 hover:bg-purple-500 text-white rounded-lg text-xs font-semibold cursor-pointer shadow"
-                  >
-                    Open Proxy Hub →
-                  </button>
-                </div>
-                <p className="text-slate-300 leading-relaxed">
-                  CORS is only enforced in web browsers — it does not exist between servers. Deploy the included <code className="text-purple-300 font-mono">proxies/nodejs/</code> to Render.com (100% free forever) or import this repo into Vercel. You will get a real URL like <code className="text-purple-300 font-mono">https://my-proxy.onrender.com</code> to enter into the Server Proxy Hub.
-                </p>
-              </div>
-
-              {/* SOLUTION 3: GitHub Actions Autobot */}
-              <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2 text-cyan-300 font-bold">
-                    <Bot className="w-4 h-4" />
-                    <span>Solution 3: 100% Autonomous GitHub Actions Autobot</span>
-                  </div>
-                  <span className="text-[10px] bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 px-2 py-0.5 rounded-full font-semibold">
-                    Runs While You Sleep
+              {/* Proxy Endpoint Configuration */}
+              <div className="flex flex-col gap-2">
+                <label className="font-semibold text-slate-200 flex items-center justify-between">
+                  <span>Server-Side Proxy Endpoint</span>
+                  <span className="text-[11px] text-slate-400 font-normal">
+                    Forwards requests without browser CORS blocks
                   </span>
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={settings.proxyUrl || ''}
+                    onChange={(e) => setSettings((s) => ({ ...s, proxyUrl: e.target.value }))}
+                    placeholder="/api/verify or https://your-proxy.onrender.com/api/verify"
+                    className="flex-1 bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 font-mono focus:outline-none focus:border-emerald-500"
+                  />
+                  <button
+                    onClick={handleTestProxy}
+                    disabled={isTestingProxy}
+                    className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg border border-slate-700 font-medium transition-colors cursor-pointer"
+                  >
+                    {isTestingProxy ? 'Pinging...' : 'Test Ping'}
+                  </button>
                 </div>
-                <p className="text-slate-300 leading-relaxed">
-                  Your repo includes <code className="text-cyan-300 font-mono">.github/workflows/nin-autobot.yml</code> and <code className="text-cyan-300 font-mono">autobot/nin_autobot.mjs</code>. This bot runs on GitHub's Linux cloud servers every 6 hours or on-demand without any browser or CORS at all. It verifies NINs, extracts names and details, and commits results to Excel automatically.
+                {proxyStatus.tested && (
+                  <div className={`p-2.5 rounded-lg border text-[11px] ${
+                    proxyStatus.ok
+                      ? 'bg-emerald-950/40 border-emerald-800 text-emerald-300'
+                      : 'bg-rose-950/40 border-rose-800 text-rose-300'
+                  }`}>
+                    {proxyStatus.ok ? `✓ Connected successfully (${proxyStatus.latencyMs}ms)` : `✗ ${proxyStatus.message}`}
+                  </div>
+                )}
+              </div>
+
+              {/* Rate Limit Throttle Delay */}
+              <div className="flex flex-col gap-2">
+                <label className="font-semibold text-slate-200 flex items-center justify-between">
+                  <span>Delay Between Requests: {settings.delayMs}ms</span>
+                  <span className="text-[11px] text-slate-400 font-normal">
+                    Recommended: 1200ms - 2000ms
+                  </span>
+                </label>
+                <input
+                  type="range"
+                  min="500"
+                  max="5000"
+                  step="100"
+                  value={settings.delayMs}
+                  onChange={(e) => setSettings((s) => ({ ...s, delayMs: Number(e.target.value) }))}
+                  className="w-full accent-emerald-500"
+                />
+              </div>
+
+              {/* BIRS Merchant Key */}
+              <div className="flex flex-col gap-2">
+                <label className="font-semibold text-slate-200">
+                  BIRS Gateway Merchant Key
+                </label>
+                <input
+                  type="password"
+                  value={settings.merchantKey}
+                  onChange={(e) => setSettings((s) => ({ ...s, merchantKey: e.target.value }))}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 font-mono focus:outline-none focus:border-emerald-500"
+                />
+              </div>
+
+              {/* GitHub Actions Autobot Notice */}
+              <div className="p-3.5 bg-slate-950/80 border border-slate-800 rounded-xl flex flex-col gap-2">
+                <div className="flex items-center gap-2 text-emerald-400 font-semibold">
+                  <ShieldCheck className="w-4 h-4" />
+                  <span>Autonomous Background Autobot</span>
+                </div>
+                <p className="text-[11px] text-slate-400 leading-relaxed">
+                  The automated GitHub runner (<code className="text-emerald-400 font-mono">.github/workflows/nin-autobot.yml</code>) runs autonomously every 6 hours or whenever you push new NINs into <code className="text-emerald-400 font-mono">autobot/nins/input.txt</code>, saving verified results directly to <code className="text-emerald-400 font-mono">autobot/results/birs_successful_taxpayers.xlsx</code>.
                 </p>
               </div>
 
-              {/* SOLUTION 4: Sandbox Demo */}
-              <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-2">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2 text-amber-300 font-bold">
-                    <Sparkles className="w-4 h-4" />
-                    <span>Solution 4: Sandbox Demo Simulation</span>
+              {/* Chrome Extension Download Card */}
+              <div className="p-3.5 bg-slate-950/80 border border-slate-800 rounded-xl flex items-center justify-between gap-3">
+                <div>
+                  <div className="flex items-center gap-1.5 text-slate-200 font-semibold">
+                    <Puzzle className="w-4 h-4 text-emerald-400" />
+                    <span>Zero-CORS Chrome Extension</span>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsDemoMode(true);
-                      setShowCorsModal(false);
-                      showToast('Switched to Sandbox Demo Mode. You can now verify all 242 NINs and export to Excel!', 'success');
-                    }}
-                    className="px-3 py-1 bg-amber-600 hover:bg-amber-500 text-white rounded-lg text-xs font-semibold cursor-pointer shadow"
-                  >
-                    Enable Sandbox Demo
-                  </button>
+                  <p className="text-[11px] text-slate-400 mt-0.5">
+                    For static hosts like GitHub Pages. Unzip and load unpacked in chrome://extensions.
+                  </p>
                 </div>
-                <p className="text-slate-400 text-[11px] leading-relaxed">
-                  Generates realistic Benue State taxpayer data with full names, phone numbers, and addresses. Ideal for previewing reports, testing batch exports to Excel (.xlsx), and validating workflows.
-                </p>
+                <button
+                  onClick={() => downloadExtensionZip()}
+                  className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-semibold text-xs shrink-0 transition-colors cursor-pointer"
+                >
+                  Download .zip
+                </button>
               </div>
+
             </div>
 
-            {/* Footer */}
-            <div className="pt-3 border-t border-slate-800 flex items-center justify-between shrink-0">
-              <a
-                href={BIRS_DIRECT_PORTAL_URL}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-xs text-emerald-400 hover:text-emerald-300 font-semibold flex items-center gap-1.5"
-              >
-                <Building2 className="w-3.5 h-3.5" />
-                <span>Official BIRS Portal Direct (No CORS)</span>
-                <ExternalLink className="w-3 h-3" />
-              </a>
+            <div className="p-4 border-t border-slate-800 bg-slate-950/50 flex justify-end">
               <button
-                type="button"
-                onClick={() => setShowCorsModal(false)}
-                className="px-5 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-xs font-semibold cursor-pointer transition-all"
+                onClick={() => setShowSettingsModal(false)}
+                className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs transition-colors cursor-pointer"
               >
-                Close Guide
+                Save & Close
               </button>
             </div>
           </div>
         </div>
       )}
+
+      {/* Footer */}
+      <footer className="border-t border-slate-900 bg-slate-950 py-4 text-center text-xs text-slate-500">
+        <p>BIRS NIN Autonomous Verifier &bull; Benue Internal Revenue Service Gateway Integration &bull; 100% Genuine Verification</p>
+      </footer>
     </div>
   );
 }
 
+export default App;
